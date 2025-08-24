@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeMux - AI Coding Assistant Multiplexer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        header {
+            background: #2d2d2d;
+            padding: 10px 20px;
+            border-bottom: 1px solid #3e3e3e;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 18px;
+            font-weight: bold;
+            color: #569cd6;
+        }
+        
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        .sidebar {
+            width: 250px;
+            background: #252526;
+            border-right: 1px solid #3e3e3e;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        .session-list {
+            margin-top: 20px;
+        }
+        
+        .session-item {
+            padding: 8px 12px;
+            margin: 4px 0;
+            background: #2d2d2d;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .session-item:hover {
+            background: #37373d;
+        }
+        
+        .session-item.active {
+            background: #094771;
+        }
+        
+        .terminal-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: #1e1e1e;
+        }
+        
+        .terminal-tabs {
+            display: flex;
+            background: #2d2d2d;
+            border-bottom: 1px solid #3e3e3e;
+            padding: 0 10px;
+        }
+        
+        .tab {
+            padding: 8px 16px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .tab:hover {
+            background: #37373d;
+        }
+        
+        .tab.active {
+            border-bottom-color: #569cd6;
+            background: #1e1e1e;
+        }
+        
+        .terminal-output {
+            flex: 1;
+            padding: 20px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 14px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .prompt-input {
+            background: #2d2d2d;
+            border-top: 1px solid #3e3e3e;
+            padding: 15px;
+            display: none;
+        }
+        
+        .prompt-input.active {
+            display: block;
+        }
+        
+        .text-input {
+            width: 100%;
+            background: #1e1e1e;
+            border: 1px solid #3e3e3e;
+            color: #d4d4d4;
+            padding: 8px 12px;
+            font-family: inherit;
+            font-size: 14px;
+            border-radius: 4px;
+        }
+        
+        .button {
+            background: #0e639c;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            margin-left: 10px;
+        }
+        
+        .button:hover {
+            background: #1177bb;
+        }
+        
+        .multi-select {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 10px 0;
+        }
+        
+        .select-option {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            background: #1e1e1e;
+            border: 1px solid #3e3e3e;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .select-option:hover {
+            background: #2d2d2d;
+        }
+        
+        .select-option input[type="checkbox"],
+        .select-option input[type="radio"] {
+            margin-right: 10px;
+        }
+        
+        .new-session-btn {
+            width: 100%;
+            padding: 10px;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+            margin-bottom: 20px;
+        }
+        
+        .new-session-btn:hover {
+            background: #1177bb;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">CodeMux</div>
+        <div class="status">Connected</div>
+    </header>
+    
+    <div class="main-container">
+        <div class="sidebar">
+            <button class="new-session-btn" onclick="createNewSession()">+ New Session</button>
+            
+            <h3>Sessions</h3>
+            <div class="session-list" id="sessionList">
+                <!-- Sessions will be added dynamically -->
+            </div>
+            
+            <h3 style="margin-top: 30px;">Projects</h3>
+            <div class="session-list" id="projectList">
+                <!-- Projects will be added dynamically -->
+            </div>
+        </div>
+        
+        <div class="terminal-container">
+            <div class="terminal-tabs" id="terminalTabs">
+                <!-- Tabs will be added dynamically -->
+            </div>
+            
+            <div class="terminal-output" id="terminalOutput">
+                Welcome to CodeMux
+                Select or create a session to begin...
+            </div>
+            
+            <div class="prompt-input" id="promptInput">
+                <!-- Dynamic prompt UI will be inserted here -->
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let currentSessionId = null;
+        let sessions = [];
+        
+        function connectWebSocket(sessionId) {
+            if (ws) {
+                ws.close();
+            }
+            
+            ws = new WebSocket(`ws://localhost:8080/ws/${sessionId}`);
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                currentSessionId = sessionId;
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                handleMessage(data);
+            };
+            
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+            };
+        }
+        
+        function handleMessage(data) {
+            if (data.type === 'output') {
+                appendOutput(data.content);
+            } else if (data.type === 'prompt') {
+                showPrompt(data.prompt);
+            }
+        }
+        
+        function appendOutput(text) {
+            const output = document.getElementById('terminalOutput');
+            output.textContent += text;
+            output.scrollTop = output.scrollHeight;
+        }
+        
+        function showPrompt(promptData) {
+            const promptDiv = document.getElementById('promptInput');
+            promptDiv.innerHTML = '';
+            promptDiv.classList.add('active');
+            
+            const promptLabel = document.createElement('div');
+            promptLabel.textContent = promptData.prompt;
+            promptLabel.style.marginBottom = '10px';
+            promptDiv.appendChild(promptLabel);
+            
+            switch (promptData.type) {
+                case 'TextInput':
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.className = 'text-input';
+                    input.placeholder = promptData.default || '';
+                    
+                    const submitBtn = document.createElement('button');
+                    submitBtn.className = 'button';
+                    submitBtn.textContent = 'Submit';
+                    submitBtn.onclick = () => sendResponse(input.value);
+                    
+                    promptDiv.appendChild(input);
+                    promptDiv.appendChild(submitBtn);
+                    
+                    input.focus();
+                    input.addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter') {
+                            sendResponse(input.value);
+                        }
+                    });
+                    break;
+                    
+                case 'Confirmation':
+                    const yesBtn = document.createElement('button');
+                    yesBtn.className = 'button';
+                    yesBtn.textContent = 'Yes';
+                    yesBtn.onclick = () => sendResponse('y');
+                    
+                    const noBtn = document.createElement('button');
+                    noBtn.className = 'button';
+                    noBtn.textContent = 'No';
+                    noBtn.onclick = () => sendResponse('n');
+                    
+                    promptDiv.appendChild(yesBtn);
+                    promptDiv.appendChild(noBtn);
+                    break;
+                    
+                case 'MultiSelect':
+                    const container = document.createElement('div');
+                    container.className = 'multi-select';
+                    
+                    promptData.options.forEach((option, index) => {
+                        const optionDiv = document.createElement('div');
+                        optionDiv.className = 'select-option';
+                        
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.id = `option-${index}`;
+                        checkbox.checked = promptData.selected?.includes(index);
+                        
+                        const label = document.createElement('label');
+                        label.htmlFor = `option-${index}`;
+                        label.textContent = option;
+                        
+                        optionDiv.appendChild(checkbox);
+                        optionDiv.appendChild(label);
+                        container.appendChild(optionDiv);
+                    });
+                    
+                    const confirmBtn = document.createElement('button');
+                    confirmBtn.className = 'button';
+                    confirmBtn.textContent = 'Confirm';
+                    confirmBtn.onclick = () => {
+                        const selected = [];
+                        container.querySelectorAll('input:checked').forEach((cb) => {
+                            selected.push(parseInt(cb.id.split('-')[1]));
+                        });
+                        sendResponse(selected);
+                    };
+                    
+                    promptDiv.appendChild(container);
+                    promptDiv.appendChild(confirmBtn);
+                    break;
+            }
+        }
+        
+        function sendResponse(response) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'response',
+                    data: response
+                }));
+                
+                document.getElementById('promptInput').classList.remove('active');
+                document.getElementById('promptInput').innerHTML = '';
+            }
+        }
+        
+        function createNewSession() {
+            const agent = prompt('Enter code agent (claude, gemini, aider):');
+            if (agent) {
+                fetch('/api/sessions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ agent, args: [] })
+                })
+                .then(res => res.json())
+                .then(session => {
+                    loadSessions();
+                    connectWebSocket(session.id);
+                });
+            }
+        }
+        
+        function loadSessions() {
+            fetch('/api/sessions')
+                .then(res => res.json())
+                .then(data => {
+                    sessions = data;
+                    const list = document.getElementById('sessionList');
+                    list.innerHTML = '';
+                    
+                    data.forEach(session => {
+                        const item = document.createElement('div');
+                        item.className = 'session-item';
+                        item.textContent = `${session.agent} - ${session.id.substr(0, 8)}`;
+                        item.onclick = () => connectWebSocket(session.id);
+                        
+                        if (session.id === currentSessionId) {
+                            item.classList.add('active');
+                        }
+                        
+                        list.appendChild(item);
+                    });
+                });
+        }
+        
+        // Load initial data
+        loadSessions();
+    </script>
+</body>
+</html>
