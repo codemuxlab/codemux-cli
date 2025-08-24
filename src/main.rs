@@ -128,9 +128,16 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
     
     // Print session info
     println!("\n🚀 CodeMux - {} Agent Session", session_info.agent.to_uppercase());
-    println!("📋 Session ID: {}", &session_info.id[..8]);
+    println!("📋 Session ID: {}", session_info.id);
     println!("🌐 Web Interface: {}", tui_session_info.url);
     println!("📁 Working Directory: {}", tui_session_info.working_dir);
+    
+    // Note for Claude sessions
+    if session_info.agent.to_lowercase() == "claude" {
+        println!("💡 Claude will use session ID: {}", session_info.id);
+        println!("   History will be in: ~/.claude/projects/-{}/", 
+            tui_session_info.working_dir.replace('/', "-"));
+    }
     
     // Open URL automatically (commented out for now)
     // println!("\n🔄 Opening web interface...");

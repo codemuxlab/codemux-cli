@@ -40,7 +40,14 @@ impl SessionManager {
 
         let session_id = Uuid::new_v4().to_string();
 
-        let final_args = args.clone();
+        // Add session ID to args if the agent is Claude
+        let mut final_args = args.clone();
+        if agent.to_lowercase() == "claude" {
+            // Add --session-id flag for Claude to continue or start a specific session
+            final_args.push("--session-id".to_string());
+            final_args.push(session_id.clone());
+        }
+        
         if let Some(proj_id) = &project_id {
             if let Some(project) = self.projects.get(proj_id) {
                 std::env::set_current_dir(&project.path)?;
