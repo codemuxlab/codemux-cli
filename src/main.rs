@@ -144,8 +144,6 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
     // Try to start TUI, fall back to simple display if it fails
     match SessionTui::new(debug) {
         Ok(mut tui) => {
-            println!("\n🎛️  Starting enhanced TUI (press Ctrl+T for interactive mode)...");
-            
             // Set session context for PTY interaction
             tui.set_session_context(session_manager.clone(), session_info.id.clone());
             
@@ -157,16 +155,20 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
             // Wait for either Ctrl+C or TUI to exit
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
-                    println!("\nShutting down...");
+                    // Don't print here - TUI is still active
                 }
                 result = tui_handle => {
+                    // TUI has exited, safe to print after cleanup
                     match result {
-                        Ok(Ok(_)) => println!("\nShutting down..."),
-                        Ok(Err(e)) => println!("\nTUI error: {}", e),
-                        Err(e) => println!("\nTUI task error: {}", e),
+                        Ok(Ok(_)) => {}, // Normal exit
+                        Ok(Err(e)) => eprintln!("\nTUI error: {}", e),
+                        Err(e) => eprintln!("\nTUI task error: {}", e),
                     }
                 }
             }
+            
+            // TUI has cleaned up, now safe to print
+            println!("\nShutting down...");
         }
         Err(e) => {
             println!("\n⚠️  Enhanced TUI not available: {}", e);

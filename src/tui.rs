@@ -173,11 +173,19 @@ impl SessionTui {
                     let mut buffer = [0u8; 4096];
                     
                     loop {
-                        // Read from PTY with proper async locking
-                        let manager = session_manager.read().await;
-                        if let Some(pty_session) = manager.sessions.get(&session_id) {
-                            // Use async lock instead of try_lock to avoid busy waiting
-                            let mut reader = pty_session.reader.lock().await;
+                        // Get the reader in a scoped block to release manager lock quickly
+                        let reader_arc = {
+                            let manager = session_manager.read().await;
+                            if let Some(pty_session) = manager.sessions.get(&session_id) {
+                                Some(pty_session.reader.clone())
+                            } else {
+                                None
+                            }
+                        }; // manager lock is released here
+                        
+                        if let Some(reader_arc) = reader_arc {
+                            // Now lock the reader without holding the manager lock
+                            let mut reader = reader_arc.lock().await;
                             
                             match reader.read(&mut buffer) {
                                 Ok(0) => {
@@ -187,8 +195,7 @@ impl SessionTui {
                                 Ok(n) => {
                                     let data = buffer[..n].to_vec();
                                     debug_log(debug_mode, format!("PTY read {} bytes, sending to channel", data.len()));
-                                    drop(reader); // Release lock before sending
-                                    drop(manager); // Release manager lock too
+                                    drop(reader); // Release reader lock before sending
                                     if tx.send(data).await.is_err() {
                                         debug_log(debug_mode, "Channel receiver dropped, exiting PTY reader");
                                         break; // Receiver dropped
@@ -197,13 +204,11 @@ impl SessionTui {
                                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                                     // No data available right now, sleep a bit
                                     drop(reader);
-                                    drop(manager);
                                     tokio::time::sleep(Duration::from_millis(10)).await;
                                 }
                                 Err(e) => {
                                     debug_log(debug_mode, format!("PTY read error: {}", e));
                                     drop(reader);
-                                    drop(manager);
                                     tokio::time::sleep(Duration::from_millis(100)).await;
                                 }
                             }
@@ -224,15 +229,49 @@ impl SessionTui {
         self.status_message = "Ready - Press Ctrl+T for interactive mode".to_string();
         
         loop {
-            if self.interactive_mode {
-                self.run_interactive_mode(&session_info).await?;
+            let should_quit = if self.interactive_mode {
+                self.run_interactive_mode(&session_info).await
             } else {
-                self.run_monitoring_mode(&session_info).await?;
+                self.run_monitoring_mode(&session_info).await
+            };
+            
+            self.debug(format!("Mode returned: {:?}", should_quit));
+            
+            match should_quit {
+                Ok(true) => {
+                    self.debug("User requested quit, breaking loop");
+                    break; // User wants to quit
+                }
+                Ok(false) => {
+                    self.debug("Mode switch, continuing loop");
+                    continue; // Mode switch, continue loop
+                }
+                Err(e) => {
+                    self.debug(format!("Error occurred: {:?}", e));
+                    // Ensure cleanup happens on error
+                    self.cleanup();
+                    return Err(e);
+                }
             }
         }
+        
+        self.debug("Exiting TUI, performing cleanup");
+        // Ensure cleanup happens on normal exit
+        self.cleanup();
+        Ok(())
     }
     
-    async fn run_monitoring_mode(&mut self, session_info: &SessionInfo) -> Result<()> {
+    fn cleanup(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        );
+        let _ = self.terminal.show_cursor();
+    }
+    
+    async fn run_monitoring_mode(&mut self, session_info: &SessionInfo) -> Result<bool> {
         self.debug("=== ENTERING MONITORING MODE ===");
         
         use tokio::time::interval;
@@ -253,45 +292,45 @@ impl SessionTui {
                         Some(Ok(Event::Key(key))) => {
                             if key.kind == KeyEventKind::Press {
                                 self.debug(format!("MONITORING MODE - Key: {:?} modifiers: {:?}", key.code, key.modifiers));
-                            
-                            // Handle quit
-                            if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                return Ok(());
-                            }
-                            
-                            // Handle toggle to interactive mode
-                            if key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                self.debug("SWITCHING TO INTERACTIVE MODE");
                                 
-                                self.interactive_mode = true;
-                                self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+T to toggle off)".to_string();
+                                // Handle quit
+                                if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                    return Ok(true); // Signal to quit
+                                }
                                 
-                                // Resize PTY for interactive mode
-                                let terminal_size = self.terminal.size()?;
-                                let terminal_area = Rect {
-                                    x: 0,
-                                    y: 1, // Account for status bar
-                                    width: terminal_size.width,
-                                    height: terminal_size.height.saturating_sub(1),
-                                };
-                                self.vt100_parser.set_size(terminal_area.height, terminal_area.width);
-                                self.resize_pty_to_match_tui(terminal_area).await;
-                                
-                                // Re-render and exit to switch modes
-                                let uptime = self.start_time.elapsed();
-                                self.draw(session_info, uptime)?;
-                                return Ok(());
-                            }
-                            
-                            // Handle other monitoring mode keys
-                            match key.code {
-                                KeyCode::Char('r') => {
-                                    self.status_message = "Display refreshed".to_string();
+                                // Handle toggle to interactive mode
+                                if key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                    self.debug("SWITCHING TO INTERACTIVE MODE");
+                                    
+                                    self.interactive_mode = true;
+                                    self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+T to toggle off)".to_string();
+                                    
+                                    // Resize PTY for interactive mode
+                                    let terminal_size = self.terminal.size()?;
+                                    let terminal_area = Rect {
+                                        x: 0,
+                                        y: 1, // Account for status bar
+                                        width: terminal_size.width,
+                                        height: terminal_size.height.saturating_sub(1),
+                                    };
+                                    self.vt100_parser.set_size(terminal_area.height, terminal_area.width);
+                                    self.resize_pty_to_match_tui(terminal_area).await;
+                                    
+                                    // Re-render and exit to switch modes
                                     let uptime = self.start_time.elapsed();
                                     self.draw(session_info, uptime)?;
+                                    return Ok(false); // Switch modes
                                 }
-                                _ => {}
-                            }
+                                
+                                // Handle other monitoring mode keys
+                                match key.code {
+                                    KeyCode::Char('r') => {
+                                        self.status_message = "Display refreshed".to_string();
+                                        let uptime = self.start_time.elapsed();
+                                        self.draw(session_info, uptime)?;
+                                    }
+                                    _ => {}
+                                }
                             }
                         }
                         Some(Ok(_)) => {
@@ -303,7 +342,7 @@ impl SessionTui {
                         }
                         None => {
                             self.debug("Event stream terminated");
-                            return Ok(()); // Exit if event stream ends
+                            return Ok(true); // Exit if event stream ends
                         }
                     }
                 }
@@ -319,7 +358,7 @@ impl SessionTui {
         }
     }
     
-    async fn run_interactive_mode(&mut self, session_info: &SessionInfo) -> Result<()> {
+    async fn run_interactive_mode(&mut self, session_info: &SessionInfo) -> Result<bool> {
         self.debug("=== ENTERING INTERACTIVE MODE ===");
         
         let mut event_stream = EventStream::new();
@@ -364,7 +403,7 @@ impl SessionTui {
                                 
                                 // Handle quit
                                 if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                    return Ok(());
+                                    return Ok(true); // Signal to quit
                                 }
                                 
                                 // Handle toggle back to monitoring mode
@@ -377,7 +416,7 @@ impl SessionTui {
                                     // Re-render and exit to switch modes
                                     let uptime = self.start_time.elapsed();
                                     self.draw(session_info, uptime)?;
-                                    return Ok(());
+                                    return Ok(false); // Switch modes
                                 }
                                 
                                 // Send all other keys to PTY
@@ -393,7 +432,7 @@ impl SessionTui {
                         }
                         None => {
                             self.debug("Event stream terminated");
-                            return Ok(()); // Exit if event stream ends
+                            return Ok(true); // Exit if event stream ends
                         }
                     }
                 }
@@ -671,13 +710,7 @@ fn draw_instructions(f: &mut Frame, area: Rect) {
 
 impl Drop for SessionTui {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
-        let _ = self.terminal.show_cursor();
+        self.cleanup();
     }
 }
 
