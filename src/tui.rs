@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -17,9 +17,30 @@ use std::io;
 use tokio::time::{Duration, Instant};
 use tui_term::widget::PseudoTerminal;
 use vt100::Parser;
+use futures_util::StreamExt;
+use tokio::sync::mpsc;
 
 use std::sync::Arc;
 use crate::session::SessionManager;
+
+/// Write a debug log message to the debug log file
+fn debug_log(debug_mode: bool, message: impl std::fmt::Display) {
+    if debug_mode {
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("codemux_debug.log") 
+        {
+            use std::io::Write;
+            let _ = writeln!(
+                file, 
+                "[{}] {}", 
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                message
+            );
+        }
+    }
+}
 
 pub struct SessionTui {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
@@ -30,7 +51,6 @@ pub struct SessionTui {
     session_manager: Option<Arc<tokio::sync::RwLock<SessionManager>>>,
     session_id: Option<String>,
     vt100_parser: Parser,
-    needs_pty_resize: bool,
 }
 
 pub struct SessionInfo {
@@ -42,6 +62,11 @@ pub struct SessionInfo {
 }
 
 impl SessionTui {
+    /// Log a debug message if debug mode is enabled
+    fn debug(&self, message: impl std::fmt::Display) {
+        debug_log(self.debug_mode, message);
+    }
+    
     pub fn new(debug_mode: bool) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -58,7 +83,6 @@ impl SessionTui {
             session_manager: None,
             session_id: None,
             vt100_parser: Parser::new(30, 120, 0), // rows, cols, scrollback
-            needs_pty_resize: false,
         })
     }
 
@@ -73,25 +97,31 @@ impl SessionTui {
                 let manager = session_manager.read().await;
                 if let Some(pty_session) = manager.sessions.get(session_id) {
                     let pty = pty_session.pty.lock().await;
-                    let _ = pty.resize(portable_pty::PtySize {
+                    let result = pty.resize(portable_pty::PtySize {
                         rows: terminal_area.height,
                         cols: terminal_area.width,
                         pixel_width: 0,
                         pixel_height: 0,
                     });
+                    
+                    if self.debug_mode {
+                        match result {
+                            Ok(_) => {
+                                self.debug(format!("PTY resized successfully to {}x{}", 
+                                    terminal_area.width, terminal_area.height));
+                            }
+                            Err(e) => {
+                                self.debug(format!("PTY resize failed: {}", e));
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
     async fn send_input_to_pty(&self, key: &crossterm::event::KeyEvent) {
-        if self.debug_mode {
-            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(file, "[{}] send_input_to_pty called with key: {:?}", 
-                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), key);
-            }
-        }
+        self.debug(format!("send_input_to_pty called with key: {:?}", key));
         
         if let Some(session_manager) = &self.session_manager {
             if let Some(session_id) = &self.session_id {
@@ -99,247 +129,332 @@ impl SessionTui {
                 if let Some(pty_session) = manager.sessions.get(session_id) {
                     // Convert crossterm key event to bytes for PTY
                     if let Some(input_bytes) = key_to_bytes(key) {
-                        if self.debug_mode {
-                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(file, "[{}] Sending to PTY: {:?} (bytes: {:?})", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), key, input_bytes);
-                            }
-                        }
+                        self.debug(format!("Sending to PTY: {:?} (bytes: {:?})", key, input_bytes));
                         
-                        let pty = pty_session.pty.lock().await;
-                        if let Ok(mut writer) = pty.take_writer() {
-                            let _ = writer.write_all(&input_bytes);
-                            let _ = writer.flush();
+                        let mut writer = pty_session.writer.lock().await;
+                        // Send the input
+                        let write_result = writer.write_all(&input_bytes);
+                        let flush_result = writer.flush();
+                        
+                        self.debug(format!("Write result: {:?}, Flush result: {:?}", write_result, flush_result));
+                        
+                        // For debugging: if this is Enter, also log that we sent a line terminator
+                        if matches!(key.code, crossterm::event::KeyCode::Enter) {
+                            self.debug("SENT ENTER - line should be processed now");
                         }
                     } else {
-                        if self.debug_mode {
-                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(file, "[{}] key_to_bytes returned None for key: {:?}", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), key);
-                            }
-                        }
+                        self.debug(format!("key_to_bytes returned None for key: {:?}", key));
                     }
                 } else {
-                    if self.debug_mode {
-                        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                            use std::io::Write;
-                            let _ = writeln!(file, "[{}] PTY session not found for id: {:?}", 
-                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), session_id);
-                        }
-                    }
+                    self.debug(format!("PTY session not found for id: {:?}", session_id));
                 }
             } else {
-                if self.debug_mode {
-                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                        use std::io::Write;
-                        let _ = writeln!(file, "[{}] No session_id set", 
-                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
-                    }
-                }
+                self.debug("No session_id set");
             }
         } else {
-            if self.debug_mode {
-                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                    use std::io::Write;
-                    let _ = writeln!(file, "[{}] No session_manager set", 
-                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
-                }
-            }
+            self.debug("No session_manager set");
         }
     }
 
-    async fn read_pty_output(&mut self) {
+    async fn create_pty_output_stream(&self) -> mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = mpsc::channel(100);
+        
         if let Some(session_manager) = &self.session_manager {
             if let Some(session_id) = &self.session_id {
-                let manager = session_manager.read().await;
-                if let Some(pty_session) = manager.sessions.get(session_id) {
-                    // Use try_lock to avoid blocking on the reader lock
-                    if let Ok(mut reader) = pty_session.reader.try_lock() {
-                        let mut buffer = [0u8; 1024]; // Smaller buffer for non-blocking reads
-                        
-                        // Only try to read once per call to avoid blocking
-                        match reader.read(&mut buffer) {
-                            Ok(0) => {
-                                // EOF - PTY might be closed
-                                if self.debug_mode {
-                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                        use std::io::Write;
-                                        let _ = writeln!(file, "[{}] PTY reader reached EOF", 
-                                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                let session_manager = session_manager.clone();
+                let session_id = session_id.clone();
+                let debug_mode = self.debug_mode;
+                
+                self.debug(format!("Creating PTY output stream for session: {}", session_id));
+                
+                // Spawn a task to continuously read from PTY
+                tokio::spawn(async move {
+                    debug_log(debug_mode, "PTY reader task started");
+                    let mut buffer = [0u8; 4096];
+                    
+                    loop {
+                        // Read from PTY with proper async locking
+                        let manager = session_manager.read().await;
+                        if let Some(pty_session) = manager.sessions.get(&session_id) {
+                            // Use async lock instead of try_lock to avoid busy waiting
+                            let mut reader = pty_session.reader.lock().await;
+                            
+                            match reader.read(&mut buffer) {
+                                Ok(0) => {
+                                    debug_log(debug_mode, "PTY reader reached EOF");
+                                    break;
+                                }
+                                Ok(n) => {
+                                    let data = buffer[..n].to_vec();
+                                    debug_log(debug_mode, format!("PTY read {} bytes, sending to channel", data.len()));
+                                    drop(reader); // Release lock before sending
+                                    drop(manager); // Release manager lock too
+                                    if tx.send(data).await.is_err() {
+                                        debug_log(debug_mode, "Channel receiver dropped, exiting PTY reader");
+                                        break; // Receiver dropped
                                     }
                                 }
-                            }
-                            Ok(n) => {
-                                // Process PTY output through vt100 parser
-                                self.vt100_parser.process(&buffer[..n]);
-                                
-                                if self.debug_mode {
-                                    let new_data = String::from_utf8_lossy(&buffer[..n]);
-                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                        use std::io::Write;
-                                        let _ = writeln!(file, "[{}] Read {} bytes from PTY: {:?}", 
-                                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), n, new_data);
-                                    }
+                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                    // No data available right now, sleep a bit
+                                    drop(reader);
+                                    drop(manager);
+                                    tokio::time::sleep(Duration::from_millis(10)).await;
+                                }
+                                Err(e) => {
+                                    debug_log(debug_mode, format!("PTY read error: {}", e));
+                                    drop(reader);
+                                    drop(manager);
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
                                 }
                             }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                // No data available - this is expected for non-blocking reads
-                            }
-                            Err(e) => {
-                                if self.debug_mode {
-                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                        use std::io::Write;
-                                        let _ = writeln!(file, "[{}] PTY read error: {}", 
-                                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), e);
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Reader is locked - skip this iteration
-                        if self.debug_mode {
-                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(file, "[{}] PTY reader is locked, skipping", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
-                            }
+                        } else {
+                            debug_log(debug_mode, "Session not found in PTY reader");
+                            break;
                         }
                     }
-                }
+                });
             }
         }
+        
+        rx
     }
 
     pub async fn run(&mut self, session_info: SessionInfo) -> Result<()> {
+        self.interactive_mode = false;
+        self.status_message = "Ready - Press Ctrl+T for interactive mode".to_string();
+        
         loop {
-            let uptime = self.start_time.elapsed();
-            
-            
-            // Read PTY output if in interactive mode
             if self.interactive_mode {
-                self.read_pty_output().await;
+                self.run_interactive_mode(&session_info).await?;
+            } else {
+                self.run_monitoring_mode(&session_info).await?;
             }
-            
-            self.draw(&session_info, uptime)?;
-            
-            // Resize PTY if we just entered interactive mode
-            if self.needs_pty_resize && self.interactive_mode {
-                if self.debug_mode {
-                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                        use std::io::Write;
-                        let _ = writeln!(file, "[{}] Starting PTY resize", 
-                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
-                    }
-                }
+        }
+    }
+    
+    async fn run_monitoring_mode(&mut self, session_info: &SessionInfo) -> Result<()> {
+        self.debug("=== ENTERING MONITORING MODE ===");
+        
+        use tokio::time::interval;
+        let mut display_interval = interval(Duration::from_secs(1));
+        let mut event_stream = EventStream::new();
+        
+        // Initial render
+        let uptime = self.start_time.elapsed();
+        self.draw(session_info, uptime)?;
+        
+        loop {
+            tokio::select! {
+                biased; // Ensure keyboard events get priority over display updates
                 
-                // Get terminal size after draw
-                let terminal_size = self.terminal.size()?;
-                let terminal_area = Rect {
-                    x: 0,
-                    y: 1, // Account for status bar
-                    width: terminal_size.width,
-                    height: terminal_size.height.saturating_sub(1),
-                };
-                
-                // Resize both PTY and vt100 parser
-                self.vt100_parser.set_size(terminal_area.height, terminal_area.width);
-                self.resize_pty_to_match_tui(terminal_area).await;
-                self.needs_pty_resize = false;
-                
-                if self.debug_mode {
-                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                        use std::io::Write;
-                        let _ = writeln!(file, "[{}] PTY resize completed", 
-                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
-                    }
-                }
-            }
-
-            // Check for events with timeout
-            if event::poll(Duration::from_millis(50))? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        if self.debug_mode {
-                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(file, "[{}] === KEY EVENT === Key: {:?} modifiers: {:?} Interactive: {}", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                                    key.code, key.modifiers, self.interactive_mode);
+                // Handle keyboard events from async stream (prioritize user input)
+                maybe_event = event_stream.next() => {
+                    match maybe_event {
+                        Some(Ok(Event::Key(key))) => {
+                            if key.kind == KeyEventKind::Press {
+                                self.debug(format!("MONITORING MODE - Key: {:?} modifiers: {:?}", key.code, key.modifiers));
+                            
+                            // Handle quit
+                            if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                return Ok(());
                             }
-                        }
-                        // Debug key presses
-                        tracing::debug!("Key pressed: {:?} with modifiers: {:?}", key.code, key.modifiers);
-                        
-                        if self.debug_mode {
-                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                use std::io::Write;
-                                let is_ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL);
-                                let is_ctrl_t = key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL);
-                                let _ = writeln!(file, "[{}] Key: {:?} modifiers: {:?} | Ctrl+C: {} | Ctrl+T: {} | Interactive: {}", 
-                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                                    key.code, key.modifiers, is_ctrl_c, is_ctrl_t, self.interactive_mode);
-                            }
-                        }
-                        
-                        // Universal quit - check first!
-                        if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                            break;
-                        }
-
-                        // Universal toggle with Ctrl+T
-                        let is_toggle_key = key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL);
-                        
-                        if is_toggle_key {
-                            self.interactive_mode = !self.interactive_mode;
-                            if self.interactive_mode {
-                                self.needs_pty_resize = true; // Flag that we need to resize
+                            
+                            // Handle toggle to interactive mode
+                            if key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                self.debug("SWITCHING TO INTERACTIVE MODE");
+                                
+                                self.interactive_mode = true;
                                 self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+T to toggle off)".to_string();
-                            } else {
-                                self.status_message = "Interactive mode OFF - Press Ctrl+T to toggle on".to_string();
+                                
+                                // Resize PTY for interactive mode
+                                let terminal_size = self.terminal.size()?;
+                                let terminal_area = Rect {
+                                    x: 0,
+                                    y: 1, // Account for status bar
+                                    width: terminal_size.width,
+                                    height: terminal_size.height.saturating_sub(1),
+                                };
+                                self.vt100_parser.set_size(terminal_area.height, terminal_area.width);
+                                self.resize_pty_to_match_tui(terminal_area).await;
+                                
+                                // Re-render and exit to switch modes
+                                let uptime = self.start_time.elapsed();
+                                self.draw(session_info, uptime)?;
+                                return Ok(());
                             }
                             
-                            if self.debug_mode {
-                                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                    use std::io::Write;
-                                    let _ = writeln!(file, "[{}] Mode toggled - Interactive: {}", 
-                                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), self.interactive_mode);
-                                }
-                            }
-                            
-                            // Skip to next iteration to redraw with new mode
-                            continue;
-                        }
-
-                        if self.interactive_mode {
-                            if self.debug_mode {
-                                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
-                                    use std::io::Write;
-                                    let _ = writeln!(file, "[{}] In interactive mode, calling send_input_to_pty", 
-                                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
-                                }
-                            }
-                            // In interactive mode, pass all other input to PTY
-                            self.send_input_to_pty(&key).await;
-                        } else {
-                            // In monitoring mode, handle TUI navigation
+                            // Handle other monitoring mode keys
                             match key.code {
                                 KeyCode::Char('r') => {
                                     self.status_message = "Display refreshed".to_string();
+                                    let uptime = self.start_time.elapsed();
+                                    self.draw(session_info, uptime)?;
                                 }
                                 _ => {}
                             }
+                            }
                         }
+                        Some(Ok(_)) => {
+                            // Other events (mouse, resize, etc.) - ignore for now
+                        }
+                        Some(Err(e)) => {
+                            self.debug(format!("Event stream error: {:?}", e));
+                            // Continue trying to read events
+                        }
+                        None => {
+                            self.debug("Event stream terminated");
+                            return Ok(()); // Exit if event stream ends
+                        }
+                    }
+                }
+                
+                // Update display every second (lower priority)
+                _ = display_interval.tick() => {
+                    let uptime = self.start_time.elapsed();
+                    self.draw(session_info, uptime)?;
+                    
+                    self.debug(format!("DISPLAY UPDATE - uptime: {}s", uptime.as_secs()));
+                }
+            }
+        }
+    }
+    
+    async fn run_interactive_mode(&mut self, session_info: &SessionInfo) -> Result<()> {
+        self.debug("=== ENTERING INTERACTIVE MODE ===");
+        
+        let mut event_stream = EventStream::new();
+        let mut pty_output_stream = self.create_pty_output_stream().await;
+        
+        // Add a periodic timer to keep the display updated
+        use tokio::time::interval;
+        let mut display_interval = interval(Duration::from_secs(1));
+        
+        // Add a rate limiter for PTY processing to prevent starvation
+        let mut pty_throttle = interval(Duration::from_millis(50));
+        
+        // Initial render
+        let uptime = self.start_time.elapsed();
+        self.draw(session_info, uptime)?;
+        
+        // Debug the initial VT100 parser state
+        let vt100_size = self.vt100_parser.screen().size();
+        let terminal_size = self.terminal.size()?;
+        self.debug(format!("Starting interactive mode loop - Terminal: {}x{}, VT100: {}x{}", 
+            terminal_size.width, terminal_size.height, vt100_size.1, vt100_size.0));
+        
+        self.debug("Starting interactive mode loop");
+        
+        loop {
+            tokio::select! {
+                biased; // Process branches in order, ensuring timer gets a chance
+                
+                // Periodic display update (also serves as heartbeat)
+                _ = display_interval.tick() => {
+                    let uptime = self.start_time.elapsed();
+                    self.debug(format!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs()));
+                    self.draw(session_info, uptime)?;
+                }
+                
+                // Handle keyboard events from async stream (prioritize user input)
+                maybe_event = event_stream.next() => {
+                    match maybe_event {
+                        Some(Ok(Event::Key(key))) => {
+                            if key.kind == KeyEventKind::Press {
+                                self.debug(format!("INTERACTIVE MODE - Key: {:?} modifiers: {:?}", key.code, key.modifiers));
+                                
+                                // Handle quit
+                                if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                    return Ok(());
+                                }
+                                
+                                // Handle toggle back to monitoring mode
+                                if key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                    self.debug("SWITCHING TO MONITORING MODE");
+                                    
+                                    self.interactive_mode = false;
+                                    self.status_message = "Interactive mode OFF - Press Ctrl+T to toggle on".to_string();
+                                    
+                                    // Re-render and exit to switch modes
+                                    let uptime = self.start_time.elapsed();
+                                    self.draw(session_info, uptime)?;
+                                    return Ok(());
+                                }
+                                
+                                // Send all other keys to PTY
+                                self.send_input_to_pty(&key).await;
+                            }
+                        }
+                        Some(Ok(_)) => {
+                            // Other events (mouse, resize, etc.) - ignore for now
+                        }
+                        Some(Err(e)) => {
+                            self.debug(format!("Event stream error: {:?}", e));
+                            // Continue trying to read events
+                        }
+                        None => {
+                            self.debug("Event stream terminated");
+                            return Ok(()); // Exit if event stream ends
+                        }
+                    }
+                }
+                
+                // Handle PTY output (throttled to prevent starvation)
+                _ = pty_throttle.tick() => {
+                    // Try to drain multiple chunks at once, but limited per cycle
+                    let mut chunks_processed = 0;
+                    let max_chunks_per_cycle = 3; // Reduced to ensure fairness
+                    
+                    while chunks_processed < max_chunks_per_cycle {
+                        match pty_output_stream.try_recv() {
+                            Ok(data) => {
+                                self.vt100_parser.process(&data);
+                                
+                                if self.debug_mode && chunks_processed == 0 {
+                                    // Only log first chunk to avoid spam, but show cursor position
+                                    let output_str = String::from_utf8_lossy(&data);
+                                    let screen = self.vt100_parser.screen();
+                                    self.debug(format!("PTY OUTPUT - {} bytes: {:?} | Cursor: ({}, {})", 
+                                        data.len(), output_str, screen.cursor_position().0, screen.cursor_position().1));
+                                }
+                                
+                                chunks_processed += 1;
+                            }
+                            Err(_) => break, // No more data available
+                        }
+                    }
+                    
+                    if chunks_processed > 0 {
+                        if self.debug_mode {
+                            self.debug(format!("Processed {} PTY chunks this cycle", chunks_processed));
+                        }
+                        
+                        // Re-render once after processing batch
+                        let uptime = self.start_time.elapsed();
+                        self.draw(session_info, uptime)?;
                     }
                 }
             }
         }
-
-        Ok(())
     }
 
     fn draw(&mut self, session_info: &SessionInfo, uptime: Duration) -> Result<()> {
+        // Pre-compute terminal size and ensure VT100 parser matches if in interactive mode
+        let terminal_size = self.terminal.size()?;
+        if self.interactive_mode {
+            let terminal_area_height = terminal_size.height.saturating_sub(1); // Account for status bar
+            let terminal_area_width = terminal_size.width;
+            
+            let current_size = self.vt100_parser.screen().size();
+            if current_size != (terminal_area_height, terminal_area_width) {
+                self.vt100_parser.set_size(terminal_area_height, terminal_area_width);
+                if self.debug_mode {
+                    self.debug(format!("Resized VT100 parser from {}x{} to {}x{}", 
+                        current_size.0, current_size.1,
+                        terminal_area_height, terminal_area_width));
+                }
+            }
+        }
+        
         self.terminal.draw(|f| {
             let size = f.area();
             

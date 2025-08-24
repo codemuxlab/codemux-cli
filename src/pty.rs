@@ -10,6 +10,7 @@ pub struct PtySession {
     pub _args: Vec<String>,
     pub pty: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     pub reader: Arc<Mutex<Box<dyn std::io::Read + Send>>>,
+    pub writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
 }
 
 impl PtySession {
@@ -53,6 +54,7 @@ impl PtySession {
         let _child = pty_pair.slave.spawn_command(cmd)?;
         
         let reader = pty_pair.master.try_clone_reader()?;
+        let writer = pty_pair.master.take_writer()?;
         
         Ok(PtySession {
             _id: id,
@@ -60,13 +62,14 @@ impl PtySession {
             _args: args,
             pty: Arc::new(Mutex::new(pty_pair.master)),
             reader: Arc::new(Mutex::new(reader)),
+            writer: Arc::new(Mutex::new(writer)),
         })
     }
     
     pub async fn _write(&self, data: &[u8]) -> Result<()> {
-        let pty = self.pty.lock().await;
-        let mut writer = pty.take_writer()?;
+        let mut writer = self.writer.lock().await;
         writer.write_all(data)?;
+        writer.flush()?;
         Ok(())
     }
     
