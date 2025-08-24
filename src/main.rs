@@ -3,6 +3,7 @@ mod prompt_detector;
 mod pty;
 mod session;
 mod tui;
+mod tui_writer;
 mod web;
 
 use anyhow::Result;
@@ -14,6 +15,7 @@ use tokio::sync::RwLock;
 use config::Config;
 use session::SessionManager;
 use tui::{SessionTui, SessionInfo as TuiSessionInfo};
+use tui_writer::TuiWriter;
 
 #[derive(Parser, Debug)]
 #[command(name = "codemux")]
@@ -64,12 +66,39 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::load()?;
     
-    tracing_subscriber::fmt::init();
+    // Configure tracing differently for run vs daemon mode
+    let tui_writer_and_rx = if matches!(&cli.command, Commands::Run { .. }) {
+        // For run mode, create TUI writer
+        let (tui_writer, log_rx) = TuiWriter::new();
+        
+        tracing_subscriber::fmt()
+            .with_writer(tui_writer)
+            .with_ansi(false) // No ANSI colors in output
+            .init();
+        
+        if matches!(&cli.command, Commands::Run { debug: true, .. }) {
+            let debug_log_path = std::env::temp_dir().join("codemux-debug.log");
+            println!("🐛 Debug mode enabled - logs will also be written to: {:?}", debug_log_path);
+        }
+        
+        Some(log_rx)
+    } else {
+        // For daemon and other modes, use stderr normally
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .init();
+        None
+    };
     
     // Initialize logging differently based on mode
     match cli.command {
         Commands::Run { agent, port, debug, args } => {
-            run_quick_session(config, agent, port, debug, args).await?;
+            if let Some(log_rx) = tui_writer_and_rx {
+                run_quick_session(config, agent, port, debug, args, log_rx).await?;
+            } else {
+                // This shouldn't happen since we only create tui_writer_and_rx for Run commands
+                panic!("TUI writer should be available for Run command");
+            }
         }
         Commands::Daemon { port } => {
             start_daemon(config, port).await?;
@@ -88,7 +117,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool, args: Vec<String>) -> Result<()> {
+async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool, args: Vec<String>, log_rx: tokio::sync::mpsc::UnboundedReceiver<tui_writer::LogEntry>) -> Result<()> {
     if !config.is_agent_allowed(&agent) {
         anyhow::bail!("Code agent '{}' is not whitelisted. Add it to the config to use.", agent);
     }
@@ -135,18 +164,22 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
     // Note for Claude sessions
     if session_info.agent.to_lowercase() == "claude" {
         println!("💡 Claude will use session ID: {}", session_info.id);
-        println!("   History will be in: ~/.claude/projects/-{}/", 
-            tui_session_info.working_dir.replace('/', "-"));
+        let project_path = if tui_session_info.working_dir.starts_with('/') {
+            format!("-{}", tui_session_info.working_dir[1..].replace('/', "-"))
+        } else {
+            format!("-{}", tui_session_info.working_dir.replace('/', "-"))
+        };
+        println!("   History will be in: ~/.claude/projects/{}/", project_path);
     }
     
-    // Open URL automatically (commented out for now)
-    // println!("\n🔄 Opening web interface...");
-    // if let Err(e) = open::that(&tui_session_info.url) {
-    //     println!("⚠️  Could not auto-open browser: {}", e);
-    //     println!("💡 Please manually open: {}", tui_session_info.url);
-    // } else {
-    //     println!("✅ Web interface opened in your default browser");
-    // }
+    // Open URL automatically  
+    println!("\n🔄 Opening web interface...");
+    if let Err(e) = open::that(&tui_session_info.url) {
+        println!("⚠️  Could not auto-open browser: {}", e);
+        println!("💡 Please manually open: {}", tui_session_info.url);
+    } else {
+        println!("✅ Web interface opened in your default browser");
+    }
     
     // Try to start TUI, fall back to simple display if it fails
     match SessionTui::new(debug) {
@@ -156,7 +189,7 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
             
             // Run TUI in a separate task
             let tui_handle = tokio::spawn(async move {
-                tui.run(tui_session_info).await
+                tui.run(tui_session_info, log_rx).await
             });
             
             // Wait for either Ctrl+C or TUI to exit
@@ -168,26 +201,26 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
                     // TUI has exited, safe to print after cleanup
                     match result {
                         Ok(Ok(_)) => {}, // Normal exit
-                        Ok(Err(e)) => eprintln!("\nTUI error: {}", e),
-                        Err(e) => eprintln!("\nTUI task error: {}", e),
+                        Ok(Err(e)) => tracing::error!("TUI error: {}", e),
+                        Err(e) => tracing::error!("TUI task error: {}", e),
                     }
                 }
             }
             
             // TUI has cleaned up, now safe to print
-            println!("\nShutting down...");
+            eprintln!("\nShutting down...");
         }
         Err(e) => {
-            println!("\n⚠️  Enhanced TUI not available: {}", e);
-            println!("📺 Using simple mode (press Ctrl+C to stop)");
-            println!("\n┌─────────────────────────────────────────┐");
-            println!("│  ⚡ Status: Running                     │");
-            println!("│  🌐 Web UI: {:<23} │", tui_session_info.url);
-            println!("└─────────────────────────────────────────┘");
+            eprintln!("\n⚠️  Enhanced TUI not available: {}", e);
+            eprintln!("📺 Using simple mode (press Ctrl+C to stop)");
+            eprintln!("\n┌─────────────────────────────────────────┐");
+            eprintln!("│  ⚡ Status: Running                     │");
+            eprintln!("│  🌐 Web UI: {:<23} │", tui_session_info.url);
+            eprintln!("└─────────────────────────────────────────┘");
             
             // Simple fallback - just wait for Ctrl+C
             tokio::signal::ctrl_c().await?;
-            println!("\nShutting down...");
+            eprintln!("\nShutting down...");
         }
     }
     

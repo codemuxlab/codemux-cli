@@ -23,7 +23,8 @@ cargo build --release  # For production builds
 
 ### Run
 ```bash
-cargo run
+cargo run                    # Normal run mode
+cargo run -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
 ```
 
 ### Test
@@ -91,3 +92,5 @@ When implementing features, consider using:
 - **State Management**: In daemon mode, persist project list and session state to SQLite
 - **Web UI**: Use modern web components, avoid terminal emulator for interactive prompts
 - **Process Management**: Properly handle SIGTERM/SIGINT for graceful shutdown
+- **Debug Logging**: In debug mode (`--debug` flag), all tracing output is written to `/tmp/codemux-debug.log` to avoid interfering with TUI display. In normal mode, only ERROR level messages are logged and discarded.
+- **Output to Terminal**: Use `eprintln!` instead of `println!` to avoid interfering with the TUI display. The TUI uses stdout for rendering, so any `println!` calls will corrupt the display. Use `eprintln!` for debugging or error messages that need to go to stderr.

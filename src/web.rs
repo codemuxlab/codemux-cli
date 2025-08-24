@@ -1,12 +1,14 @@
 use anyhow::Result;
 use axum::{
     extract::{ws::WebSocketUpgrade, State, Path},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, sse::{Event, Sse}},
     routing::get,
     Json, Router,
 };
+use futures::stream::Stream;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::convert::Infallible;
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 
@@ -32,6 +34,7 @@ pub async fn start_web_server(port: u16, session_manager: Arc<RwLock<SessionMana
         .route("/api/sessions", axum::routing::post(create_session))
         .route("/api/sessions/:id", get(get_session))
         .route("/api/sessions/:id", axum::routing::delete(delete_session))
+        .route("/api/sessions/:id/stream", get(stream_session_jsonl))
         .route("/api/projects", get(list_projects))
         .route("/api/projects", axum::routing::post(add_project))
         .layer(ServiceBuilder::new())
@@ -53,6 +56,7 @@ pub async fn start_web_server_run_mode(port: u16, session_manager: Arc<RwLock<Se
     let app = Router::new()
         .route("/", get(run_mode_session))
         .route("/ws/:session_id", get(websocket_handler))
+        .route("/api/sessions/:id/stream", get(stream_session_jsonl))
         .layer(ServiceBuilder::new())
         .with_state(state.clone());
     
@@ -106,7 +110,8 @@ async fn handle_socket(
     let pty_session = if let Some(session) = manager.sessions.get(&session_id) {
         session
     } else {
-        tracing::error!("Session {} not found", session_id);
+        tracing::error!("WebSocket: Session {} not found", session_id);
+        
         return;
     };
     
@@ -296,6 +301,105 @@ async fn delete_session(
     manager.close_session(&id).await
         .map(|_| "Session closed".to_string())
         .map_err(|e| e.to_string())
+}
+
+async fn stream_session_jsonl(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    use std::time::Duration;
+    use tokio::fs::File;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    
+    let stream = async_stream::stream! {
+        // Get session info to determine the agent
+        let manager = state.session_manager.read().await;
+        let session_info = manager.get_session(&session_id);
+        drop(manager);
+        
+        if let Some(info) = session_info {
+            // Only process Claude sessions
+            if info.agent.to_lowercase() == "claude" {
+                // Get current working directory and convert to dash-case for project folder
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let cwd_str = cwd.to_string_lossy();
+                let project_name = if cwd_str.starts_with('/') {
+                    // Remove leading slash, then replace remaining slashes with dashes, then add prefix dash
+                    format!("-{}", cwd_str[1..].replace('/', "-"))
+                } else {
+                    // For relative paths or Windows paths, just replace slashes with dashes and add prefix
+                    format!("-{}", cwd_str.replace('/', "-"))
+                };
+                
+                // Build path to JSONL file
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+                let jsonl_path = format!("{}/.claude/projects/{}/{}.jsonl", 
+                    home, project_name, session_id);
+                
+                // Try to open the file
+                if let Ok(file) = File::open(&jsonl_path).await {
+                    let mut reader = BufReader::new(file);
+                    let mut line = String::new();
+                    let mut last_position = 0u64;
+                    
+                    // Read existing content first
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line).await {
+                            Ok(0) => break, // EOF for now
+                            Ok(_) => {
+                                if !line.trim().is_empty() {
+                                    yield Ok(Event::default().data(line.trim()));
+                                }
+                            }
+                            Err(e) => {
+                                yield Ok(Event::default().data(format!("Error reading: {}", e)));
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Now tail the file for new content
+                    yield Ok(Event::default().data("[STREAMING]"));
+                    
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        
+                        // Re-open file to check for new content
+                        if let Ok(mut file) = File::open(&jsonl_path).await {
+                            use tokio::io::AsyncSeekExt;
+                            
+                            // Seek to last position
+                            let _ = file.seek(std::io::SeekFrom::Start(last_position)).await;
+                            let mut reader = BufReader::new(file);
+                            
+                            loop {
+                                line.clear();
+                                match reader.read_line(&mut line).await {
+                                    Ok(0) => break, // No new content
+                                    Ok(n) => {
+                                        last_position += n as u64;
+                                        if !line.trim().is_empty() {
+                                            yield Ok(Event::default().data(line.trim()));
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    yield Ok(Event::default().data(format!("JSONL file not found: {}", jsonl_path)));
+                }
+            } else {
+                yield Ok(Event::default().data(format!("Not a Claude session: {}", info.agent)));
+            }
+        } else {
+            yield Ok(Event::default().data("Session not found"));
+        }
+    };
+    
+    Sse::new(stream)
 }
 
 async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectInfo>> {

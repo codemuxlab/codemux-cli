@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 
 use std::sync::Arc;
 use crate::session::SessionManager;
+use crate::tui_writer::{LogEntry, LogLevel};
 
 /// Write a debug log message to the debug log file
 fn debug_log(debug_mode: bool, message: impl std::fmt::Display) {
@@ -51,6 +52,7 @@ pub struct SessionTui {
     session_manager: Option<Arc<tokio::sync::RwLock<SessionManager>>>,
     session_id: Option<String>,
     vt100_parser: Parser,
+    system_logs: Vec<LogEntry>,
 }
 
 pub struct SessionInfo {
@@ -83,12 +85,22 @@ impl SessionTui {
             session_manager: None,
             session_id: None,
             vt100_parser: Parser::new(30, 120, 0), // rows, cols, scrollback
+            system_logs: Vec::new(),
         })
     }
 
     pub fn set_session_context(&mut self, session_manager: Arc<tokio::sync::RwLock<SessionManager>>, session_id: String) {
         self.session_manager = Some(session_manager);
         self.session_id = Some(session_id);
+    }
+    
+    pub fn add_system_log(&mut self, log_entry: LogEntry) {
+        self.system_logs.push(log_entry);
+        
+        // Keep only last 10 log entries to prevent memory growth
+        if self.system_logs.len() > 10 {
+            self.system_logs.remove(0);
+        }
     }
     
     async fn resize_pty_to_match_tui(&self, terminal_area: Rect) {
@@ -224,33 +236,48 @@ impl SessionTui {
         rx
     }
 
-    pub async fn run(&mut self, session_info: SessionInfo) -> Result<()> {
+    pub async fn run(&mut self, session_info: SessionInfo, mut log_rx: tokio::sync::mpsc::UnboundedReceiver<LogEntry>) -> Result<()> {
         self.interactive_mode = false;
         self.status_message = "Ready - Press Ctrl+T for interactive mode".to_string();
         
         loop {
-            let should_quit = if self.interactive_mode {
-                self.run_interactive_mode(&session_info).await
-            } else {
-                self.run_monitoring_mode(&session_info).await
-            };
-            
-            self.debug(format!("Mode returned: {:?}", should_quit));
-            
-            match should_quit {
-                Ok(true) => {
-                    self.debug("User requested quit, breaking loop");
-                    break; // User wants to quit
+            tokio::select! {
+                // Handle incoming system logs
+                log_entry = log_rx.recv() => {
+                    if let Some(log_entry) = log_entry {
+                        self.add_system_log(log_entry);
+                        // Re-render to show the new log entry
+                        let uptime = self.start_time.elapsed();
+                        let _ = self.draw(&session_info, uptime);
+                    }
                 }
-                Ok(false) => {
-                    self.debug("Mode switch, continuing loop");
-                    continue; // Mode switch, continue loop
-                }
-                Err(e) => {
-                    self.debug(format!("Error occurred: {:?}", e));
-                    // Ensure cleanup happens on error
-                    self.cleanup();
-                    return Err(e);
+                
+                // Run the current mode
+                should_quit = async {
+                    if self.interactive_mode {
+                        self.run_interactive_mode(&session_info).await
+                    } else {
+                        self.run_monitoring_mode(&session_info).await
+                    }
+                } => {
+                    self.debug(format!("Mode returned: {:?}", should_quit));
+                    
+                    match should_quit {
+                        Ok(true) => {
+                            self.debug("User requested quit, breaking loop");
+                            break; // User wants to quit
+                        }
+                        Ok(false) => {
+                            self.debug("Mode switch, continuing loop");
+                            continue; // Mode switch, continue loop
+                        }
+                        Err(e) => {
+                            self.debug(format!("Error occurred: {:?}", e));
+                            // Ensure cleanup happens on error
+                            self.cleanup();
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
@@ -573,6 +600,7 @@ impl SessionTui {
                     .constraints([
                         Constraint::Length(8),  // Session info
                         Constraint::Length(5),  // Status
+                        Constraint::Length(5),  // System errors
                         Constraint::Min(3),     // Instructions
                     ])
                     .margin(1)
@@ -584,8 +612,11 @@ impl SessionTui {
                 // Status section
                 draw_status(f, content_chunks[1], uptime, self.interactive_mode);
                 
+                // System logs section
+                draw_system_logs(f, content_chunks[2], &self.system_logs);
+                
                 // Instructions
-                draw_instructions(f, content_chunks[2]);
+                draw_instructions(f, content_chunks[3]);
 
                 // Footer
                 let footer = Paragraph::new("Press Ctrl+C to stop | Press Ctrl+T for interactive mode | Press 'r' to refresh")
@@ -820,6 +851,45 @@ fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bo
             .block(status_block);
         
         f.render_widget(status_paragraph, area);
+}
+
+fn draw_system_logs(f: &mut Frame, area: Rect, logs: &[LogEntry]) {
+    let logs_block = Block::default()
+        .title("📋 System Logs")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Blue));
+
+    if logs.is_empty() {
+        let no_logs = Paragraph::new("No system logs")
+            .style(Style::default().fg(Color::Gray))
+            .block(logs_block)
+            .alignment(Alignment::Center);
+        f.render_widget(no_logs, area);
+    } else {
+        let log_lines: Vec<Line> = logs.iter().map(|log| {
+            let timestamp = log.timestamp.format("%H:%M:%S").to_string();
+            let level_color = match log.level {
+                LogLevel::Error => Color::Red,
+                LogLevel::Warn => Color::Yellow,
+                LogLevel::Info => Color::Cyan,
+                LogLevel::Debug => Color::Gray,
+                LogLevel::Trace => Color::DarkGray,
+            };
+            
+            Line::from(vec![
+                Span::styled(format!("[{}] ", timestamp), Style::default().fg(Color::Gray)),
+                Span::styled(format!("{:<5} ", log.level.as_str()), Style::default().fg(level_color).add_modifier(Modifier::BOLD)),
+                Span::styled(&log.message, Style::default().fg(Color::White)),
+            ])
+        }).collect();
+
+        let logs_paragraph = Paragraph::new(log_lines)
+            .block(logs_block)
+            .wrap(Wrap { trim: true })
+            .scroll((logs.len().saturating_sub(3) as u16, 0)); // Auto-scroll to show latest logs
+        
+        f.render_widget(logs_paragraph, area);
+    }
 }
 
 fn draw_instructions(f: &mut Frame, area: Rect) {

@@ -21,6 +21,9 @@ directories = "5.0"
 toml = "0.8"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 futures-util = "0.3"
+futures = "0.3"
+async-stream = "0.3"
+tokio-stream = "0.1"
 ratatui = "0.28"
 crossterm = { version = "0.28", features = ["event-stream"] }
 open = "5.0"

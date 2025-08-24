@@ -522,6 +522,9 @@
                 <button class="control-btn" onclick="toggleLogs()" title="Toggle logs panel" id="logsToggle">
                     <span>📋</span>
                 </button>
+                <button class="control-btn" onclick="toggleJsonl()" title="Toggle JSONL viewer" id="jsonlToggle">
+                    <span>📄</span>
+                </button>
                 <button class="control-btn" onclick="toggleSettings()" title="Settings">
                     <span>⚙️</span>
                 </button>
@@ -543,6 +546,16 @@
             </div>
             <div class="log-content" id="logContent">
                 <!-- Logs will appear here -->
+            </div>
+        </div>
+        
+        <div class="log-panel" id="jsonlPanel" style="display: none;">
+            <div class="log-header">
+                <div class="log-title">Claude Session History (JSONL)</div>
+                <button class="log-clear" onclick="clearJsonl()">Clear View</button>
+            </div>
+            <div class="log-content" id="jsonlContent" style="font-family: 'Monaco', 'Menlo', monospace; font-size: 12px;">
+                <!-- JSONL content will appear here -->
             </div>
         </div>
         
@@ -572,6 +585,10 @@
         let agentName = window.AGENT_NAME || 'AI';
         let term = null;
         let fitAddon = null;
+        
+        function getSessionId() {
+            return sessionId;
+        }
         
         function initTerminal() {
             // Initialize xterm.js
@@ -748,11 +765,14 @@
         
         function toggleLogs() {
             const logPanel = document.getElementById('logPanel');
+            const jsonlPanel = document.getElementById('jsonlPanel');
             const isHidden = logPanel.classList.contains('hidden');
             
             if (isHidden) {
                 logPanel.classList.remove('hidden');
+                jsonlPanel.style.display = 'none';
                 document.getElementById('logsToggle').style.background = 'var(--accent)';
+                document.getElementById('jsonlToggle').style.background = '';
             } else {
                 logPanel.classList.add('hidden');
                 document.getElementById('logsToggle').style.background = '';
@@ -764,6 +784,240 @@
                     fitAddon.fit();
                 }
             }, 350);
+        }
+        
+        function toggleJsonl() {
+            const logPanel = document.getElementById('logPanel');
+            const jsonlPanel = document.getElementById('jsonlPanel');
+            const isHidden = jsonlPanel.style.display === 'none';
+            
+            if (isHidden) {
+                jsonlPanel.style.display = 'flex';
+                logPanel.classList.add('hidden');
+                document.getElementById('jsonlToggle').style.background = 'var(--accent)';
+                document.getElementById('logsToggle').style.background = '';
+                
+                // Start streaming JSONL if not already started
+                if (!window.jsonlEventSource) {
+                    startJsonlStream();
+                }
+            } else {
+                jsonlPanel.style.display = 'none';
+                document.getElementById('jsonlToggle').style.background = '';
+            }
+            
+            // Resize terminal after panel toggle
+            setTimeout(() => {
+                if (fitAddon) {
+                    fitAddon.fit();
+                }
+            }, 350);
+        }
+        
+        function clearJsonl() {
+            document.getElementById('jsonlContent').innerHTML = '';
+        }
+        
+        function parseMarkdown(text) {
+            if (!text) return '';
+            
+            // Escape HTML to prevent XSS, then apply markdown
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#x27;');
+            
+            // Code blocks (``` or `` or `)
+            html = html
+                .replace(/```(\w+)?\n([\s\S]*?)\n```/g, '<pre style="background: var(--bg-primary); padding: 8px; border-radius: 4px; overflow-x: auto; border-left: 3px solid var(--accent); margin: 8px 0;"><code>$2</code></pre>')
+                .replace(/`([^`\n]+)`/g, '<code style="background: var(--bg-primary); padding: 2px 4px; border-radius: 3px; font-family: monospace;">$1</code>');
+            
+            // Headers
+            html = html
+                .replace(/^### (.*$)/gm, '<h3 style="color: var(--accent); margin: 12px 0 8px 0; font-size: 16px;">$1</h3>')
+                .replace(/^## (.*$)/gm, '<h2 style="color: var(--accent); margin: 16px 0 10px 0; font-size: 18px;">$1</h2>')
+                .replace(/^# (.*$)/gm, '<h1 style="color: var(--accent); margin: 20px 0 12px 0; font-size: 20px;">$1</h1>');
+            
+            // Bold and italic
+            html = html
+                .replace(/\*\*(.*?)\*\*/g, '<strong style="font-weight: bold;">$1</strong>')
+                .replace(/\*(.*?)\*/g, '<em style="font-style: italic;">$1</em>');
+            
+            // Lists
+            html = html
+                .replace(/^\s*[-*+]\s+(.*)$/gm, '<li style="margin: 2px 0;">$1</li>')
+                .replace(/(<li.*<\/li>)/s, '<ul style="margin: 8px 0; padding-left: 20px;">$1</ul>')
+                .replace(/^\s*(\d+)\.\s+(.*)$/gm, '<li style="margin: 2px 0;">$2</li>');
+            
+            // Line breaks - convert \n to <br> for remaining newlines
+            html = html.replace(/\n/g, '<br>');
+            
+            // Links (basic)
+            html = html.replace(/\[(.*?)\]\((.*?)\)/g, '<a href="$2" style="color: var(--accent); text-decoration: underline;" target="_blank">$1</a>');
+            
+            return html;
+        }
+        
+        function createStructuredJsonView(jsonData) {
+            const container = document.createElement('div');
+            
+            // Header with type and timestamp
+            const header = document.createElement('div');
+            header.style.display = 'flex';
+            header.style.justifyContent = 'space-between';
+            header.style.alignItems = 'center';
+            header.style.marginBottom = '8px';
+            header.style.paddingBottom = '4px';
+            header.style.borderBottom = '1px solid var(--border)';
+            
+            const typeSpan = document.createElement('span');
+            typeSpan.style.fontWeight = 'bold';
+            typeSpan.style.fontSize = '13px';
+            
+            // Style based on message type
+            switch(jsonData.type) {
+                case 'user':
+                    typeSpan.style.color = 'var(--success)';
+                    typeSpan.textContent = '👤 USER';
+                    break;
+                case 'assistant':
+                    typeSpan.style.color = 'var(--accent)';
+                    typeSpan.textContent = '🤖 ASSISTANT';
+                    break;
+                case 'summary':
+                    typeSpan.style.color = 'var(--warning)';
+                    typeSpan.textContent = '📋 SUMMARY';
+                    break;
+                default:
+                    typeSpan.style.color = 'var(--text-secondary)';
+                    typeSpan.textContent = jsonData.type?.toUpperCase() || 'DATA';
+            }
+            
+            const timestampSpan = document.createElement('span');
+            timestampSpan.style.color = 'var(--text-secondary)';
+            timestampSpan.style.fontSize = '11px';
+            if (jsonData.timestamp) {
+                const date = new Date(jsonData.timestamp);
+                timestampSpan.textContent = date.toLocaleTimeString();
+            }
+            
+            header.appendChild(typeSpan);
+            header.appendChild(timestampSpan);
+            container.appendChild(header);
+            
+            // Content based on type
+            const contentDiv = document.createElement('div');
+            contentDiv.style.fontSize = '12px';
+            contentDiv.style.lineHeight = '1.4';
+            
+            if (jsonData.type === 'summary') {
+                contentDiv.style.color = 'var(--text-primary)';
+                contentDiv.style.whiteSpace = 'pre-wrap';
+                contentDiv.textContent = jsonData.summary;
+            } else if (jsonData.message) {
+                if (jsonData.message.content) {
+                    if (typeof jsonData.message.content === 'string') {
+                        contentDiv.style.color = 'var(--text-primary)';
+                        contentDiv.innerHTML = parseMarkdown(jsonData.message.content);
+                    } else if (Array.isArray(jsonData.message.content)) {
+                        // Handle complex content arrays
+                        jsonData.message.content.forEach((item, index) => {
+                            const itemDiv = document.createElement('div');
+                            if (index > 0) itemDiv.style.marginTop = '4px';
+                            
+                            if (item.type === 'text') {
+                                itemDiv.style.color = 'var(--text-primary)';
+                                itemDiv.innerHTML = parseMarkdown(item.text);
+                            } else if (item.type === 'tool_use') {
+                                itemDiv.style.color = 'var(--accent)';
+                                itemDiv.style.fontStyle = 'italic';
+                                itemDiv.textContent = `🔧 Tool: ${item.name}`;
+                            } else if (item.type === 'tool_result') {
+                                itemDiv.style.color = 'var(--success)';
+                                itemDiv.style.fontStyle = 'italic';
+                                itemDiv.textContent = '✅ Tool result';
+                            } else {
+                                itemDiv.style.color = 'var(--text-secondary)';
+                                itemDiv.textContent = JSON.stringify(item, null, 2);
+                            }
+                            contentDiv.appendChild(itemDiv);
+                        });
+                    }
+                }
+                
+                // Show model info for assistant messages
+                if (jsonData.type === 'assistant' && jsonData.message.model) {
+                    const modelDiv = document.createElement('div');
+                    modelDiv.style.marginTop = '4px';
+                    modelDiv.style.fontSize = '10px';
+                    modelDiv.style.color = 'var(--text-secondary)';
+                    modelDiv.textContent = `Model: ${jsonData.message.model}`;
+                    contentDiv.appendChild(modelDiv);
+                }
+            } else {
+                // Fallback: show raw JSON
+                const pre = document.createElement('pre');
+                pre.style.fontSize = '10px';
+                pre.style.color = 'var(--text-secondary)';
+                pre.style.overflow = 'auto';
+                pre.style.whiteSpace = 'pre-wrap';
+                pre.textContent = JSON.stringify(jsonData, null, 2);
+                contentDiv.appendChild(pre);
+            }
+            
+            container.appendChild(contentDiv);
+            return container;
+        }
+        
+        function startJsonlStream() {
+            const sessionId = getSessionId();
+            if (!sessionId) return;
+            
+            // Close existing connection if any
+            if (window.jsonlEventSource) {
+                window.jsonlEventSource.close();
+            }
+            
+            // Create new EventSource for SSE
+            window.jsonlEventSource = new EventSource(`/api/sessions/${sessionId}/stream`);
+            
+            window.jsonlEventSource.onmessage = (event) => {
+                const content = document.getElementById('jsonlContent');
+                const entry = document.createElement('div');
+                entry.style.marginBottom = '8px';
+                entry.style.padding = '8px';
+                entry.style.borderBottom = '1px solid var(--border)';
+                entry.style.borderRadius = '4px';
+                entry.style.backgroundColor = 'var(--bg-tertiary)';
+                
+                // Check if it's the streaming marker
+                if (event.data === '[STREAMING]') {
+                    entry.style.color = 'var(--accent)';
+                    entry.style.fontStyle = 'italic';
+                    entry.textContent = '--- Live streaming enabled ---';
+                } else {
+                    try {
+                        const jsonData = JSON.parse(event.data);
+                        entry.appendChild(createStructuredJsonView(jsonData));
+                    } catch (e) {
+                        // Fallback to raw text if not valid JSON
+                        entry.style.color = 'var(--text-primary)';
+                        entry.style.fontFamily = 'monospace';
+                        entry.style.fontSize = '12px';
+                        entry.textContent = event.data;
+                    }
+                }
+                
+                content.appendChild(entry);
+                content.scrollTop = content.scrollHeight;
+            };
+            
+            window.jsonlEventSource.onerror = (error) => {
+                console.error('JSONL stream error:', error);
+                addLogEntry('JSONL stream error', 'error');
+            };
         }
         
         function showPrompt(promptData) {
