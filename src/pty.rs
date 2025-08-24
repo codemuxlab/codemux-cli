@@ -34,12 +34,11 @@ impl PtySession {
         }
         
         // Set environment variables for proper terminal behavior
-        cmd.env("TERM", "dumb"); // Use dumb terminal to prevent full-screen takeover
+        cmd.env("TERM", "xterm-256color"); // Proper terminal for full functionality
         cmd.env("COLORTERM", "truecolor");
         cmd.env("FORCE_COLOR", "1");
         cmd.env("COLUMNS", "120");
         cmd.env("LINES", "30");
-        cmd.env("NO_INTERACTIVE", "1"); // Hint to disable interactive features
         
         // Preserve all important environment variables from current session
         for (key, value) in std::env::vars() {

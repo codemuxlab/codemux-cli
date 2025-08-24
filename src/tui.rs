@@ -15,6 +15,8 @@ use ratatui::{
 };
 use std::io;
 use tokio::time::{Duration, Instant};
+use tui_term::widget::PseudoTerminal;
+use vt100::Parser;
 
 use std::sync::Arc;
 use crate::session::SessionManager;
@@ -27,8 +29,7 @@ pub struct SessionTui {
     debug_mode: bool,
     session_manager: Option<Arc<tokio::sync::RwLock<SessionManager>>>,
     session_id: Option<String>,
-    pty_buffer: String,
-    max_buffer_lines: usize,
+    vt100_parser: Parser,
     needs_pty_resize: bool,
 }
 
@@ -56,8 +57,7 @@ impl SessionTui {
             debug_mode,
             session_manager: None,
             session_id: None,
-            pty_buffer: String::new(),
-            max_buffer_lines: 10000,
+            vt100_parser: Parser::new(30, 120, 0), // rows, cols, scrollback
             needs_pty_resize: false,
         })
     }
@@ -172,22 +172,16 @@ impl SessionTui {
                                 }
                             }
                             Ok(n) => {
-                                let new_data = String::from_utf8_lossy(&buffer[..n]);
-                                self.pty_buffer.push_str(&new_data);
+                                // Process PTY output through vt100 parser
+                                self.vt100_parser.process(&buffer[..n]);
                                 
                                 if self.debug_mode {
+                                    let new_data = String::from_utf8_lossy(&buffer[..n]);
                                     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
                                         use std::io::Write;
                                         let _ = writeln!(file, "[{}] Read {} bytes from PTY: {:?}", 
                                             chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), n, new_data);
                                     }
-                                }
-                                
-                                // Keep buffer size manageable
-                                let lines: Vec<&str> = self.pty_buffer.lines().collect();
-                                if lines.len() > self.max_buffer_lines {
-                                    let keep_from = lines.len().saturating_sub(self.max_buffer_lines);
-                                    self.pty_buffer = lines[keep_from..].join("\n");
                                 }
                             }
                             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -248,6 +242,9 @@ impl SessionTui {
                     width: terminal_size.width,
                     height: terminal_size.height.saturating_sub(1),
                 };
+                
+                // Resize both PTY and vt100 parser
+                self.vt100_parser.set_size(terminal_area.height, terminal_area.width);
                 self.resize_pty_to_match_tui(terminal_area).await;
                 self.needs_pty_resize = false;
                 
@@ -366,13 +363,12 @@ impl SessionTui {
                     .alignment(Alignment::Center);
                 f.render_widget(status_bar, chunks[0]);
 
-                // PTY terminal area - show actual output
+                // PTY terminal area - show actual output via PseudoTerminal
                 let terminal_area = chunks[1];
                 
-                let terminal_paragraph = Paragraph::new(self.pty_buffer.as_str())
-                    .style(Style::default().fg(Color::White).bg(Color::Black))
-                    .wrap(Wrap { trim: false });
-                f.render_widget(terminal_paragraph, terminal_area);
+                let pseudo_terminal = PseudoTerminal::new(self.vt100_parser.screen())
+                    .block(Block::default().borders(Borders::NONE));
+                f.render_widget(pseudo_terminal, terminal_area);
 
             } else {
                 // Normal monitoring mode layout
