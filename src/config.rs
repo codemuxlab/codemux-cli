@@ -67,7 +67,7 @@ impl Config {
         Ok(Config::default())
     }
     
-    pub fn save(&self) -> Result<()> {
+    pub fn _save(&self) -> Result<()> {
         if let Some(config_dir) = directories::ProjectDirs::from("com", "codemux", "codemux") {
             std::fs::create_dir_all(config_dir.config_dir())?;
             let config_file = config_dir.config_dir().join("config.toml");

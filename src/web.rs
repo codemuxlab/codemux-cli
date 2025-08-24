@@ -15,13 +15,13 @@ use crate::session::{SessionManager, SessionInfo, ProjectInfo};
 #[derive(Clone)]
 pub struct AppState {
     pub session_manager: Arc<RwLock<SessionManager>>,
-    pub is_daemon_mode: bool,
+    pub _is_daemon_mode: bool,
 }
 
 pub async fn start_web_server(port: u16, session_manager: Arc<RwLock<SessionManager>>) -> Result<()> {
     let state = AppState { 
         session_manager,
-        is_daemon_mode: true,
+        _is_daemon_mode: true,
     };
     
     let app = Router::new()
@@ -44,10 +44,10 @@ pub async fn start_web_server(port: u16, session_manager: Arc<RwLock<SessionMana
     Ok(())
 }
 
-pub async fn start_web_server_run_mode(port: u16, session_manager: Arc<RwLock<SessionManager>>, agent: String) -> Result<()> {
+pub async fn start_web_server_run_mode(port: u16, session_manager: Arc<RwLock<SessionManager>>, _agent: String) -> Result<()> {
     let state = AppState { 
         session_manager,
-        is_daemon_mode: false,
+        _is_daemon_mode: false,
     };
     
     let app = Router::new()
@@ -71,7 +71,7 @@ async fn run_mode_session() -> Html<&'static str> {
     Html(include_str!("../static/session.html"))
 }
 
-async fn session_page(State(state): State<AppState>) -> Html<String> {
+async fn session_page(State(_state): State<AppState>) -> Html<String> {
     // For daemon mode, include back button
     let html = include_str!("../static/session.html");
     let with_back_button = html.replace("<!-- DAEMON_MODE_NAV -->", r#"
@@ -96,7 +96,7 @@ async fn handle_socket(
     state: AppState,
 ) {
     use axum::extract::ws::Message;
-    use futures_util::{SinkExt, StreamExt};
+    use futures_util::SinkExt;
     use std::io::Read;
     use std::io::Write;
     

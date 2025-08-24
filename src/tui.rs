@@ -24,6 +24,7 @@ pub struct SessionTui {
     start_time: Instant,
     interactive_mode: bool,
     status_message: String,
+    debug_mode: bool,
     session_manager: Option<Arc<tokio::sync::RwLock<SessionManager>>>,
     session_id: Option<String>,
     pty_buffer: String,
@@ -34,13 +35,13 @@ pub struct SessionTui {
 pub struct SessionInfo {
     pub id: String,
     pub agent: String,
-    pub port: u16,
+    pub _port: u16,
     pub working_dir: String,
     pub url: String,
 }
 
 impl SessionTui {
-    pub fn new() -> Result<Self> {
+    pub fn new(debug_mode: bool) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -51,7 +52,8 @@ impl SessionTui {
             terminal,
             start_time: Instant::now(),
             interactive_mode: false,
-            status_message: "Ready - Press Ctrl+, for interactive mode".to_string(),
+            status_message: "Ready - Press Ctrl+T for interactive mode".to_string(),
+            debug_mode,
             session_manager: None,
             session_id: None,
             pty_buffer: String::new(),
@@ -83,18 +85,66 @@ impl SessionTui {
     }
 
     async fn send_input_to_pty(&self, key: &crossterm::event::KeyEvent) {
+        if self.debug_mode {
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                use std::io::Write;
+                let _ = writeln!(file, "[{}] send_input_to_pty called with key: {:?}", 
+                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), key);
+            }
+        }
+        
         if let Some(session_manager) = &self.session_manager {
             if let Some(session_id) = &self.session_id {
                 let manager = session_manager.read().await;
                 if let Some(pty_session) = manager.sessions.get(session_id) {
                     // Convert crossterm key event to bytes for PTY
                     if let Some(input_bytes) = key_to_bytes(key) {
+                        if self.debug_mode {
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                use std::io::Write;
+                                let _ = writeln!(file, "[{}] Sending to PTY: {:?} (bytes: {:?})", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), key, input_bytes);
+                            }
+                        }
+                        
                         let pty = pty_session.pty.lock().await;
                         if let Ok(mut writer) = pty.take_writer() {
                             let _ = writer.write_all(&input_bytes);
                             let _ = writer.flush();
                         }
+                    } else {
+                        if self.debug_mode {
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                use std::io::Write;
+                                let _ = writeln!(file, "[{}] key_to_bytes returned None for key: {:?}", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), key);
+                            }
+                        }
                     }
+                } else {
+                    if self.debug_mode {
+                        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                            use std::io::Write;
+                            let _ = writeln!(file, "[{}] PTY session not found for id: {:?}", 
+                                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), session_id);
+                        }
+                    }
+                }
+            } else {
+                if self.debug_mode {
+                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                        use std::io::Write;
+                        let _ = writeln!(file, "[{}] No session_id set", 
+                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                    }
+                }
+            }
+        } else {
+            if self.debug_mode {
+                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                    use std::io::Write;
+                    let _ = writeln!(file, "[{}] No session_manager set", 
+                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
                 }
             }
         }
@@ -105,16 +155,33 @@ impl SessionTui {
             if let Some(session_id) = &self.session_id {
                 let manager = session_manager.read().await;
                 if let Some(pty_session) = manager.sessions.get(session_id) {
-                    let mut reader = pty_session.reader.lock().await;
-                    let mut buffer = [0u8; 4096]; // Larger buffer
-                    
-                    // Try to read multiple times to catch all available data
-                    loop {
+                    // Use try_lock to avoid blocking on the reader lock
+                    if let Ok(mut reader) = pty_session.reader.try_lock() {
+                        let mut buffer = [0u8; 1024]; // Smaller buffer for non-blocking reads
+                        
+                        // Only try to read once per call to avoid blocking
                         match reader.read(&mut buffer) {
-                            Ok(0) => break, // EOF
+                            Ok(0) => {
+                                // EOF - PTY might be closed
+                                if self.debug_mode {
+                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                        use std::io::Write;
+                                        let _ = writeln!(file, "[{}] PTY reader reached EOF", 
+                                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                                    }
+                                }
+                            }
                             Ok(n) => {
                                 let new_data = String::from_utf8_lossy(&buffer[..n]);
                                 self.pty_buffer.push_str(&new_data);
+                                
+                                if self.debug_mode {
+                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                        use std::io::Write;
+                                        let _ = writeln!(file, "[{}] Read {} bytes from PTY: {:?}", 
+                                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), n, new_data);
+                                    }
+                                }
                                 
                                 // Keep buffer size manageable
                                 let lines: Vec<&str> = self.pty_buffer.lines().collect();
@@ -123,8 +190,27 @@ impl SessionTui {
                                     self.pty_buffer = lines[keep_from..].join("\n");
                                 }
                             }
-                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break, // No more data
-                            Err(_) => break, // Other error
+                            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                                // No data available - this is expected for non-blocking reads
+                            }
+                            Err(e) => {
+                                if self.debug_mode {
+                                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                        use std::io::Write;
+                                        let _ = writeln!(file, "[{}] PTY read error: {}", 
+                                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), e);
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Reader is locked - skip this iteration
+                        if self.debug_mode {
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                use std::io::Write;
+                                let _ = writeln!(file, "[{}] PTY reader is locked, skipping", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                            }
                         }
                     }
                 }
@@ -136,6 +222,7 @@ impl SessionTui {
         loop {
             let uptime = self.start_time.elapsed();
             
+            
             // Read PTY output if in interactive mode
             if self.interactive_mode {
                 self.read_pty_output().await;
@@ -145,6 +232,14 @@ impl SessionTui {
             
             // Resize PTY if we just entered interactive mode
             if self.needs_pty_resize && self.interactive_mode {
+                if self.debug_mode {
+                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                        use std::io::Write;
+                        let _ = writeln!(file, "[{}] Starting PTY resize", 
+                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                    }
+                }
+                
                 // Get terminal size after draw
                 let terminal_size = self.terminal.size()?;
                 let terminal_area = Rect {
@@ -155,35 +250,79 @@ impl SessionTui {
                 };
                 self.resize_pty_to_match_tui(terminal_area).await;
                 self.needs_pty_resize = false;
+                
+                if self.debug_mode {
+                    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                        use std::io::Write;
+                        let _ = writeln!(file, "[{}] PTY resize completed", 
+                            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                    }
+                }
             }
 
             // Check for events with timeout
             if event::poll(Duration::from_millis(50))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
+                        if self.debug_mode {
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                use std::io::Write;
+                                let _ = writeln!(file, "[{}] === KEY EVENT === Key: {:?} modifiers: {:?} Interactive: {}", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                                    key.code, key.modifiers, self.interactive_mode);
+                            }
+                        }
                         // Debug key presses
                         tracing::debug!("Key pressed: {:?} with modifiers: {:?}", key.code, key.modifiers);
                         
-                        // Universal toggle with Ctrl+comma
-                        let is_toggle_key = key.code == KeyCode::Char(',') && key.modifiers.contains(event::KeyModifiers::CONTROL);
+                        if self.debug_mode {
+                            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                use std::io::Write;
+                                let is_ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL);
+                                let is_ctrl_t = key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL);
+                                let _ = writeln!(file, "[{}] Key: {:?} modifiers: {:?} | Ctrl+C: {} | Ctrl+T: {} | Interactive: {}", 
+                                    chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                                    key.code, key.modifiers, is_ctrl_c, is_ctrl_t, self.interactive_mode);
+                            }
+                        }
+                        
+                        // Universal quit - check first!
+                        if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                            break;
+                        }
+
+                        // Universal toggle with Ctrl+T
+                        let is_toggle_key = key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL);
                         
                         if is_toggle_key {
                             self.interactive_mode = !self.interactive_mode;
                             if self.interactive_mode {
                                 self.needs_pty_resize = true; // Flag that we need to resize
-                                self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+, to toggle off)".to_string();
+                                self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+T to toggle off)".to_string();
                             } else {
-                                self.status_message = "Interactive mode OFF - Press Ctrl+, to toggle on".to_string();
+                                self.status_message = "Interactive mode OFF - Press Ctrl+T to toggle on".to_string();
                             }
+                            
+                            if self.debug_mode {
+                                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                    use std::io::Write;
+                                    let _ = writeln!(file, "[{}] Mode toggled - Interactive: {}", 
+                                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"), self.interactive_mode);
+                                }
+                            }
+                            
+                            // Skip to next iteration to redraw with new mode
                             continue;
                         }
 
-                        // Universal quit
-                        if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                            break;
-                        }
-
                         if self.interactive_mode {
+                            if self.debug_mode {
+                                if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open("codemux_debug.log") {
+                                    use std::io::Write;
+                                    let _ = writeln!(file, "[{}] In interactive mode, calling send_input_to_pty", 
+                                        chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"));
+                                }
+                            }
                             // In interactive mode, pass all other input to PTY
                             self.send_input_to_pty(&key).await;
                         } else {
@@ -218,7 +357,7 @@ impl SessionTui {
                     .split(size);
 
                 // Minimal status bar
-                let mode_text = format!("🚀 {} | 💬 INTERACTIVE | {} | Ctrl+,=Toggle | Ctrl+C=Exit", 
+                let mode_text = format!("🚀 {} | 💬 INTERACTIVE | {} | Ctrl+T=Toggle | Ctrl+C=Exit", 
                     session_info.agent.to_uppercase(), 
                     format_duration(uptime)
                 );
@@ -274,7 +413,7 @@ impl SessionTui {
                 draw_instructions(f, content_chunks[2]);
 
                 // Footer
-                let footer = Paragraph::new("Press Ctrl+C to stop | Press Ctrl+, for interactive mode | Press 'r' to refresh")
+                let footer = Paragraph::new("Press Ctrl+C to stop | Press Ctrl+T for interactive mode | Press 'r' to refresh")
                     .style(Style::default().fg(Color::Gray))
                     .alignment(Alignment::Center)
                     .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Gray)));

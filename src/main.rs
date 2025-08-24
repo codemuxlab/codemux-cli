@@ -32,6 +32,9 @@ enum Commands {
         /// Port to listen on for the web UI
         #[arg(short, long, default_value = "8765")]
         port: u16,
+        /// Enable debug logging for key events
+        #[arg(long)]
+        debug: bool,
         /// Arguments to pass to the agent
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
@@ -65,8 +68,8 @@ async fn main() -> Result<()> {
     
     // Initialize logging differently based on mode
     match cli.command {
-        Commands::Run { agent, port, args } => {
-            run_quick_session(config, agent, port, args).await?;
+        Commands::Run { agent, port, debug, args } => {
+            run_quick_session(config, agent, port, debug, args).await?;
         }
         Commands::Daemon { port } => {
             start_daemon(config, port).await?;
@@ -85,7 +88,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_quick_session(config: Config, agent: String, port: u16, args: Vec<String>) -> Result<()> {
+async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool, args: Vec<String>) -> Result<()> {
     if !config.is_agent_allowed(&agent) {
         anyhow::bail!("Code agent '{}' is not whitelisted. Add it to the config to use.", agent);
     }
@@ -115,7 +118,7 @@ async fn run_quick_session(config: Config, agent: String, port: u16, args: Vec<S
     let tui_session_info = TuiSessionInfo {
         id: session_info.id.clone(),
         agent: session_info.agent.clone(),
-        port,
+        _port: port,
         working_dir: std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("unknown"))
             .display()
@@ -139,7 +142,7 @@ async fn run_quick_session(config: Config, agent: String, port: u16, args: Vec<S
     // }
     
     // Try to start TUI, fall back to simple display if it fails
-    match SessionTui::new() {
+    match SessionTui::new(debug) {
         Ok(mut tui) => {
             println!("\n🎛️  Starting enhanced TUI (press Ctrl+T for interactive mode)...");
             

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct PtySession {
-    pub id: String,
+    pub _id: String,
     pub agent: String,
-    pub args: Vec<String>,
+    pub _args: Vec<String>,
     pub pty: Arc<Mutex<Box<dyn portable_pty::MasterPty + Send>>>,
     pub reader: Arc<Mutex<Box<dyn std::io::Read + Send>>>,
 }
@@ -34,11 +34,12 @@ impl PtySession {
         }
         
         // Set environment variables for proper terminal behavior
-        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM", "dumb"); // Use dumb terminal to prevent full-screen takeover
         cmd.env("COLORTERM", "truecolor");
         cmd.env("FORCE_COLOR", "1");
         cmd.env("COLUMNS", "120");
         cmd.env("LINES", "30");
+        cmd.env("NO_INTERACTIVE", "1"); // Hint to disable interactive features
         
         // Preserve all important environment variables from current session
         for (key, value) in std::env::vars() {
@@ -55,28 +56,28 @@ impl PtySession {
         let reader = pty_pair.master.try_clone_reader()?;
         
         Ok(PtySession {
-            id,
+            _id: id,
             agent,
-            args,
+            _args: args,
             pty: Arc::new(Mutex::new(pty_pair.master)),
             reader: Arc::new(Mutex::new(reader)),
         })
     }
     
-    pub async fn write(&self, data: &[u8]) -> Result<()> {
+    pub async fn _write(&self, data: &[u8]) -> Result<()> {
         let pty = self.pty.lock().await;
         let mut writer = pty.take_writer()?;
         writer.write_all(data)?;
         Ok(())
     }
     
-    pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {
+    pub async fn _read(&self, buf: &mut [u8]) -> Result<usize> {
         let mut reader = self.reader.lock().await;
         let n = reader.read(buf)?;
         Ok(n)
     }
     
-    pub async fn resize(&self, rows: u16, cols: u16) -> Result<()> {
+    pub async fn _resize(&self, rows: u16, cols: u16) -> Result<()> {
         let pty = self.pty.lock().await;
         pty.resize(PtySize {
             rows,
