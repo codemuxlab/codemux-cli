@@ -333,8 +333,14 @@ impl SessionTui {
                                 }
                             }
                         }
+                        Some(Ok(Event::Resize(width, height))) => {
+                            self.debug(format!("Terminal resized to {}x{}", width, height));
+                            // Terminal was resized, update display
+                            let uptime = self.start_time.elapsed();
+                            self.draw(session_info, uptime)?;
+                        }
                         Some(Ok(_)) => {
-                            // Other events (mouse, resize, etc.) - ignore for now
+                            // Other events (mouse, etc.) - ignore
                         }
                         Some(Err(e)) => {
                             self.debug(format!("Event stream error: {:?}", e));
@@ -423,8 +429,27 @@ impl SessionTui {
                                 self.send_input_to_pty(&key).await;
                             }
                         }
+                        Some(Ok(Event::Resize(width, height))) => {
+                            self.debug(format!("Terminal resized to {}x{} in interactive mode", width, height));
+                            
+                            // Update VT100 parser size
+                            let terminal_area = Rect {
+                                x: 0,
+                                y: 1, // Account for status bar
+                                width,
+                                height: height.saturating_sub(1),
+                            };
+                            self.vt100_parser.set_size(terminal_area.height, terminal_area.width);
+                            
+                            // Resize PTY to match new terminal size
+                            self.resize_pty_to_match_tui(terminal_area).await;
+                            
+                            // Redraw with new size
+                            let uptime = self.start_time.elapsed();
+                            self.draw(session_info, uptime)?;
+                        }
                         Some(Ok(_)) => {
-                            // Other events (mouse, resize, etc.) - ignore for now
+                            // Other events (mouse, etc.) - ignore
                         }
                         Some(Err(e)) => {
                             self.debug(format!("Event stream error: {:?}", e));
@@ -583,30 +608,143 @@ fn key_to_bytes(key: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
     
     match key.code {
         KeyCode::Enter => Some(b"\r".to_vec()),
-        KeyCode::Tab => Some(b"\t".to_vec()),
+        KeyCode::Tab => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[Z".to_vec())  // Shift+Tab (CSI Z)
+            } else {
+                Some(b"\t".to_vec())
+            }
+        }
+        KeyCode::BackTab => Some(b"\x1b[Z".to_vec()),  // BackTab (Shift+Tab)
         KeyCode::Backspace => Some(b"\x7f".to_vec()),  // DEL character
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()),  // Delete sequence
-        KeyCode::Left => Some(b"\x1b[D".to_vec()),
-        KeyCode::Right => Some(b"\x1b[C".to_vec()),
-        KeyCode::Up => Some(b"\x1b[A".to_vec()),
-        KeyCode::Down => Some(b"\x1b[B".to_vec()),
-        KeyCode::Home => Some(b"\x1b[H".to_vec()),
-        KeyCode::End => Some(b"\x1b[F".to_vec()),
-        KeyCode::PageUp => Some(b"\x1b[5~".to_vec()),
-        KeyCode::PageDown => Some(b"\x1b[6~".to_vec()),
+        KeyCode::Insert => Some(b"\x1b[2~".to_vec()),  // Insert
+        KeyCode::Left => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[1;2D".to_vec())  // Shift+Left
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                Some(b"\x1b[1;3D".to_vec())  // Alt+Left
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[1;5D".to_vec())  // Ctrl+Left
+            } else {
+                Some(b"\x1b[D".to_vec())
+            }
+        }
+        KeyCode::Right => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[1;2C".to_vec())  // Shift+Right
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                Some(b"\x1b[1;3C".to_vec())  // Alt+Right
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[1;5C".to_vec())  // Ctrl+Right
+            } else {
+                Some(b"\x1b[C".to_vec())
+            }
+        }
+        KeyCode::Up => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[1;2A".to_vec())  // Shift+Up
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                Some(b"\x1b[1;3A".to_vec())  // Alt+Up
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[1;5A".to_vec())  // Ctrl+Up
+            } else {
+                Some(b"\x1b[A".to_vec())
+            }
+        }
+        KeyCode::Down => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[1;2B".to_vec())  // Shift+Down
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                Some(b"\x1b[1;3B".to_vec())  // Alt+Down
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[1;5B".to_vec())  // Ctrl+Down
+            } else {
+                Some(b"\x1b[B".to_vec())
+            }
+        }
+        KeyCode::Home => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[1;2H".to_vec())  // Shift+Home
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[1;5H".to_vec())  // Ctrl+Home
+            } else {
+                Some(b"\x1b[H".to_vec())
+            }
+        }
+        KeyCode::End => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[1;2F".to_vec())  // Shift+End
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[1;5F".to_vec())  // Ctrl+End
+            } else {
+                Some(b"\x1b[F".to_vec())
+            }
+        }
+        KeyCode::PageUp => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[5;2~".to_vec())  // Shift+PageUp
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[5;5~".to_vec())  // Ctrl+PageUp
+            } else {
+                Some(b"\x1b[5~".to_vec())
+            }
+        }
+        KeyCode::PageDown => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(b"\x1b[6;2~".to_vec())  // Shift+PageDown
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x1b[6;5~".to_vec())  // Ctrl+PageDown
+            } else {
+                Some(b"\x1b[6~".to_vec())
+            }
+        }
         KeyCode::Esc => Some(b"\x1b".to_vec()),
+        KeyCode::F(n) => {
+            // Function keys F1-F12
+            match n {
+                1 => Some(b"\x1bOP".to_vec()),     // F1
+                2 => Some(b"\x1bOQ".to_vec()),     // F2
+                3 => Some(b"\x1bOR".to_vec()),     // F3
+                4 => Some(b"\x1bOS".to_vec()),     // F4
+                5 => Some(b"\x1b[15~".to_vec()),   // F5
+                6 => Some(b"\x1b[17~".to_vec()),   // F6
+                7 => Some(b"\x1b[18~".to_vec()),   // F7
+                8 => Some(b"\x1b[19~".to_vec()),   // F8
+                9 => Some(b"\x1b[20~".to_vec()),   // F9
+                10 => Some(b"\x1b[21~".to_vec()),  // F10
+                11 => Some(b"\x1b[23~".to_vec()),  // F11
+                12 => Some(b"\x1b[24~".to_vec()),  // F12
+                _ => None,
+            }
+        }
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
-                // Handle Ctrl+key combinations (except Ctrl+I which we reserve)
+                // Handle Ctrl+key combinations
                 match c {
                     'a'..='z' => {
                         let ctrl_char = (c as u8) - b'a' + 1;
                         Some(vec![ctrl_char])
                     }
+                    'A'..='Z' => {
+                        // Ctrl+Shift+letter
+                        let ctrl_char = (c.to_ascii_lowercase() as u8) - b'a' + 1;
+                        Some(vec![ctrl_char])
+                    }
+                    '[' | '\\' | ']' | '^' | '_' => {
+                        // Special control characters
+                        let ctrl_char = c as u8 & 0x1f;
+                        Some(vec![ctrl_char])
+                    }
                     _ => None,
                 }
+            } else if key.modifiers.contains(KeyModifiers::ALT) {
+                // Alt+key sends ESC followed by the key
+                let mut bytes = vec![0x1b]; // ESC
+                let _ = write!(&mut bytes, "{}", c);
+                Some(bytes)
             } else {
-                // Regular character
+                // Regular character (including with Shift)
                 let mut bytes = Vec::new();
                 let _ = write!(&mut bytes, "{}", c);
                 Some(bytes)
