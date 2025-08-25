@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PromptType {
-    TextInput { 
+    TextInput {
         prompt: String,
         default: Option<String>,
     },
@@ -52,13 +52,13 @@ impl _PromptDetector {
                 _detect_file_path as fn(&str) -> Option<PromptType>,
             ),
         ];
-        
+
         _PromptDetector { patterns }
     }
-    
+
     pub fn _detect(&self, output: &str) -> Option<PromptType> {
         let clean_output = _strip_ansi_codes(output);
-        
+
         for (pattern, detector) in &self.patterns {
             if pattern.is_match(&clean_output) {
                 if let Some(prompt_type) = detector(&clean_output) {
@@ -66,7 +66,7 @@ impl _PromptDetector {
                 }
             }
         }
-        
+
         None
     }
 }
@@ -91,7 +91,7 @@ fn _detect_confirmation(text: &str) -> Option<PromptType> {
     } else {
         None
     };
-    
+
     Some(PromptType::Confirmation {
         prompt: text.trim().to_string(),
         default,
@@ -101,14 +101,17 @@ fn _detect_confirmation(text: &str) -> Option<PromptType> {
 fn _detect_selection(text: &str) -> Option<PromptType> {
     let lines: Vec<&str> = text.lines().collect();
     let mut options = Vec::new();
-    
+
     for line in lines.iter().rev() {
-        if line.trim().starts_with('[') || line.trim().starts_with('•') || 
-           line.trim().starts_with('-') || line.trim().starts_with(char::is_numeric) {
+        if line.trim().starts_with('[')
+            || line.trim().starts_with('•')
+            || line.trim().starts_with('-')
+            || line.trim().starts_with(char::is_numeric)
+        {
             options.push(line.trim().to_string());
         }
     }
-    
+
     if !options.is_empty() {
         options.reverse();
         Some(PromptType::SingleSelect {

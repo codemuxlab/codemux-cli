@@ -1,31 +1,42 @@
 use anyhow::Result;
 use axum::{
-    extract::{ws::WebSocketUpgrade, State, Path},
-    response::{Html, IntoResponse, sse::{Event, Sse}},
+    extract::{ws::WebSocketUpgrade, Path, State},
+    response::{
+        sse::{Event, Sse},
+        Html, IntoResponse,
+    },
     routing::get,
     Json, Router,
 };
 use futures::stream::Stream;
 use serde::Deserialize;
-use std::sync::Arc;
 use std::convert::Infallible;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 
-use crate::session::{SessionManager, SessionInfo, ProjectInfo};
+use crate::pty_session::PtyInputMessage;
+use crate::session::{ProjectInfo, SessionInfo, SessionManager};
 
 #[derive(Clone)]
 pub struct AppState {
     pub session_manager: Arc<RwLock<SessionManager>>,
     pub _is_daemon_mode: bool,
+    pub grid_broadcast_tx: Option<tokio::sync::broadcast::Sender<String>>,
+    pub pty_channels: Option<crate::pty_session::PtyChannels>,
 }
 
-pub async fn start_web_server(port: u16, session_manager: Arc<RwLock<SessionManager>>) -> Result<()> {
-    let state = AppState { 
+pub async fn start_web_server(
+    port: u16,
+    session_manager: Arc<RwLock<SessionManager>>,
+) -> Result<()> {
+    let state = AppState {
         session_manager,
         _is_daemon_mode: true,
+        grid_broadcast_tx: None,
+        pty_channels: None,
     };
-    
+
     let app = Router::new()
         .route("/", get(daemon_index))
         .route("/session/:session_id", get(session_page))
@@ -39,30 +50,49 @@ pub async fn start_web_server(port: u16, session_manager: Arc<RwLock<SessionMana
         .route("/api/projects", axum::routing::post(add_project))
         .layer(ServiceBuilder::new())
         .with_state(state);
-    
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     tracing::info!("Daemon web server listening on http://0.0.0.0:{}", port);
-    
+
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-pub async fn start_web_server_run_mode(port: u16, session_manager: Arc<RwLock<SessionManager>>, _agent: String) -> Result<()> {
-    let state = AppState { 
+pub async fn start_web_server_run_mode(
+    port: u16,
+    session_manager: Arc<RwLock<SessionManager>>,
+    _agent: String,
+    grid_rx: tokio::sync::broadcast::Receiver<String>,
+    pty_channels: crate::pty_session::PtyChannels,
+) -> Result<()> {
+    // Store the broadcast sender for websocket handlers to subscribe
+    let (grid_tx, _) = tokio::sync::broadcast::channel(1000);
+    // Forward messages from the main grid receiver to our local sender
+    let grid_tx_clone = grid_tx.clone();
+    let mut grid_rx = grid_rx;
+    tokio::spawn(async move {
+        while let Ok(msg) = grid_rx.recv().await {
+            let _ = grid_tx_clone.send(msg);
+        }
+    });
+
+    let state = AppState {
         session_manager,
         _is_daemon_mode: false,
+        grid_broadcast_tx: Some(grid_tx),
+        pty_channels: Some(pty_channels),
     };
-    
+
     let app = Router::new()
         .route("/", get(run_mode_session))
         .route("/ws/:session_id", get(websocket_handler))
         .route("/api/sessions/:id/stream", get(stream_session_jsonl))
         .layer(ServiceBuilder::new())
         .with_state(state.clone());
-    
+
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
     tracing::info!("Run mode web server listening on http://0.0.0.0:{}", port);
-    
+
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -78,11 +108,14 @@ async fn run_mode_session() -> Html<&'static str> {
 async fn session_page(State(_state): State<AppState>) -> Html<String> {
     // For daemon mode, include back button
     let html = include_str!("../static/session.html");
-    let with_back_button = html.replace("<!-- DAEMON_MODE_NAV -->", r#"
+    let with_back_button = html.replace(
+        "<!-- DAEMON_MODE_NAV -->",
+        r#"
         <a href="/" class="back-btn">
             <span>← Back to Sessions</span>
         </a>
-    "#);
+    "#,
+    );
     Html(with_back_button)
 }
 
@@ -100,109 +133,229 @@ async fn handle_socket(
     state: AppState,
 ) {
     use axum::extract::ws::Message;
-    use std::io::Read;
-    use std::io::Write;
-    
-    tracing::info!("WebSocket connection established for session: {}", session_id);
-    
-    // Get the PTY session
-    let manager = state.session_manager.read().await;
-    let pty_session = if let Some(session) = manager.sessions.get(&session_id) {
-        session
+
+    tracing::info!(
+        "WebSocket connection established for session: {}",
+        session_id
+    );
+
+    // Get PTY channels from state
+    let pty_channels = if let Some(channels) = &state.pty_channels {
+        channels
     } else {
-        tracing::error!("WebSocket: Session {} not found", session_id);
-        
+        tracing::error!(
+            "WebSocket: No PTY channels available for session: {}",
+            session_id
+        );
         return;
     };
-    
-    let pty = pty_session.pty.clone();
-    let reader = pty_session.reader.clone();
-    drop(manager); // Release the lock
-    
+
     // Send initial connection message
-    let session_short = if session_id.len() >= 8 { &session_id[..8] } else { &session_id };
+    let session_short = if session_id.len() >= 8 {
+        &session_id[..8]
+    } else {
+        &session_id
+    };
     let welcome_msg = serde_json::json!({
         "type": "output",
         "content": format!("Connected to session {} - Claude Code TUI starting...\r\n", session_short),
         "source": "system"
     });
-    
-    if socket.send(Message::Text(welcome_msg.to_string())).await.is_err() {
+
+    if socket
+        .send(Message::Text(welcome_msg.to_string()))
+        .await
+        .is_err()
+    {
         return;
     }
-    
-    // Give Claude Code a moment to initialize
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-    
-    // Create channels for communication
-    let (pty_to_ws_tx, mut pty_to_ws_rx) = tokio::sync::mpsc::channel(100);
-    let (ws_to_pty_tx, mut ws_to_pty_rx) = tokio::sync::mpsc::channel(100);
-    
-    // Task to read from PTY and send to channel
-    let reader_clone = reader.clone();
-    let pty_reader_task = tokio::spawn(async move {
-        let mut buffer = [0u8; 1024];
-        loop {
-            let mut reader_guard = reader_clone.lock().await;
-            match reader_guard.read(&mut buffer) {
-                Ok(0) => {
-                    tracing::info!("PTY reader reached EOF");
-                    break;
-                }
-                Ok(n) => {
-                    let data = String::from_utf8_lossy(&buffer[..n]).to_string();
-                    tracing::debug!("PTY output ({} bytes): {:?}", n, data);
-                    if pty_to_ws_tx.send(data).await.is_err() {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Error reading from PTY: {}", e);
-                    break;
-                }
-            }
-            drop(reader_guard);
-            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+    // Subscribe to PTY size updates
+    let mut size_rx = pty_channels.size_tx.subscribe();
+    if let Ok(current_size) = size_rx.try_recv() {
+        let size_msg = serde_json::json!({
+            "type": "pty_size",
+            "rows": current_size.rows,
+            "cols": current_size.cols
+        });
+
+        if socket
+            .send(Message::Text(size_msg.to_string()))
+            .await
+            .is_err()
+        {
+            return;
         }
-    });
-    
-    // Task to write to PTY from channel
-    let pty_clone = pty.clone();
-    let pty_writer_task = tokio::spawn(async move {
-        while let Some(data) = ws_to_pty_rx.recv().await {
-            let input = format!("{}\n", data);
-            let pty_guard = pty_clone.lock().await;
-            if let Ok(mut writer) = pty_guard.take_writer() {
-                if let Err(e) = writer.write_all(input.as_bytes()) {
-                    tracing::error!("Failed to write to PTY: {}", e);
-                    break;
+    }
+
+    // Subscribe to PTY grid updates (our new primary channel)
+    let mut grid_rx = pty_channels.grid_tx.subscribe();
+
+    // Subscribe to PTY output for fallback/debug (raw bytes)
+    let mut pty_output_rx = pty_channels.output_tx.subscribe();
+
+    // Clone input channel for sending to PTY
+    let pty_input_tx = pty_channels.input_tx.clone();
+
+    // Request keyframe for new client (so they get current terminal state immediately)
+    match pty_channels.request_keyframe().await {
+        Ok(keyframe) => {
+            tracing::debug!("Received keyframe for new WebSocket client");
+            // Convert keyframe to JSON and send immediately
+            let keyframe_json = match keyframe {
+                crate::pty_session::GridUpdateMessage::Keyframe {
+                    size,
+                    cells,
+                    cursor,
+                    timestamp,
+                } => {
+                    serde_json::json!({
+                        "type": "grid_update",
+                        "update_type": "keyframe",
+                        "size": {
+                            "rows": size.rows,
+                            "cols": size.cols
+                        },
+                        "cells": cells.into_iter().map(|((row, col), cell)| {
+                            serde_json::json!([row, col, cell])
+                        }).collect::<Vec<_>>(),
+                        "cursor": {
+                            "row": cursor.0,
+                            "col": cursor.1
+                        },
+                        "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default().as_millis()
+                    })
                 }
-                let _ = writer.flush();
+                // This shouldn't happen for keyframe requests, but handle it
+                crate::pty_session::GridUpdateMessage::Diff { .. } => {
+                    tracing::warn!("Received diff instead of keyframe for new client request");
+                    serde_json::json!({"type": "error", "message": "Expected keyframe, got diff"})
+                }
+            };
+
+            if socket
+                .send(Message::Text(keyframe_json.to_string()))
+                .await
+                .is_err()
+            {
+                tracing::warn!("Failed to send initial keyframe to new WebSocket client");
+                return;
             }
         }
-    });
-    
+        Err(e) => {
+            tracing::warn!("Failed to request keyframe for new WebSocket client: {}", e);
+        }
+    }
+
     // Main WebSocket handling loop
     loop {
         tokio::select! {
-            // Send PTY output to WebSocket
-            pty_data = pty_to_ws_rx.recv() => {
-                if let Some(data) = pty_data {
-                    let msg = serde_json::json!({
-                        "type": "output",
-                        "content": data,
-                        "source": "pty"
-                    });
-                    
-                    if socket.send(Message::Text(msg.to_string())).await.is_err() {
+            // Forward grid updates to WebSocket (primary channel)
+            grid_update = grid_rx.recv() => {
+                match grid_update {
+                    Ok(update) => {
+                        // Convert grid update to JSON format for frontend
+                        let grid_json = match update {
+                            crate::pty_session::GridUpdateMessage::Keyframe { size, cells, cursor, timestamp } => {
+                                serde_json::json!({
+                                    "type": "grid_update",
+                                    "update_type": "keyframe",
+                                    "size": {
+                                        "rows": size.rows,
+                                        "cols": size.cols
+                                    },
+                                    "cells": cells.into_iter().map(|((row, col), cell)| {
+                                        serde_json::json!([row, col, cell])
+                                    }).collect::<Vec<_>>(),
+                                    "cursor": {
+                                        "row": cursor.0,
+                                        "col": cursor.1
+                                    },
+                                    "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_millis()
+                                })
+                            }
+                            crate::pty_session::GridUpdateMessage::Diff { changes, cursor, timestamp } => {
+                                serde_json::json!({
+                                    "type": "grid_update",
+                                    "update_type": "diff",
+                                    "cells": changes.into_iter().map(|(row, col, cell)| {
+                                        serde_json::json!([row, col, cell])
+                                    }).collect::<Vec<_>>(),
+                                    "cursor": cursor.map(|(row, col)| serde_json::json!({
+                                        "row": row,
+                                        "col": col
+                                    })),
+                                    "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default().as_millis()
+                                })
+                            }
+                        };
+
+                        if socket.send(Message::Text(grid_json.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("PTY grid channel closed");
                         break;
                     }
-                } else {
-                    break; // Channel closed
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::warn!("WebSocket lagged behind grid updates");
+                        // Continue processing
+                    }
                 }
             }
-            
-            // Handle WebSocket messages
+
+            // Optional: Forward raw PTY output for debugging
+            pty_output = pty_output_rx.recv() => {
+                match pty_output {
+                    Ok(_output_msg) => {
+                        // Skip raw output - we're using grid updates now
+                        // Could optionally send for debugging:
+                        // let output_json = serde_json::json!({
+                        //     "type": "raw_output",
+                        //     "content": String::from_utf8_lossy(&output_msg.data),
+                        //     "source": "pty"
+                        // });
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("PTY output channel closed");
+                        // Don't break - we can continue with just grid updates
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::debug!("WebSocket lagged behind raw PTY output");
+                    }
+                }
+            }
+
+            // Forward PTY size updates to WebSocket
+            size_update = size_rx.recv() => {
+                match size_update {
+                    Ok(size) => {
+                        let size_msg = serde_json::json!({
+                            "type": "pty_size",
+                            "rows": size.rows,
+                            "cols": size.cols
+                        });
+
+                        if socket.send(Message::Text(size_msg.to_string())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("PTY size channel closed");
+                        // Don't break - we can continue without size updates
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::warn!("WebSocket lagged behind PTY size updates");
+                        // Continue processing
+                    }
+                }
+            }
+
+            // Handle WebSocket messages from client
             ws_msg = socket.recv() => {
                 match ws_msg {
                     Some(Ok(Message::Text(text))) => {
@@ -210,24 +363,31 @@ async fn handle_socket(
                             match parsed.get("type").and_then(|t| t.as_str()) {
                                 Some("input") => {
                                     if let Some(data) = parsed.get("data").and_then(|d| d.as_str()) {
-                                        if ws_to_pty_tx.send(data.to_string()).await.is_err() {
+                                        // For web input, we need to ensure it ends with Enter (\r) so Claude processes it
+                                        let mut input_bytes = data.as_bytes().to_vec();
+
+                                        // If the input doesn't already end with a carriage return, add one
+                                        if !input_bytes.ends_with(b"\n") {
+                                            input_bytes.push(b'\n'); // Add carriage return so Claude processes the input
+                                        }
+
+                                        let input_msg = PtyInputMessage {
+                                            data: input_bytes,
+                                            client_id: format!("websocket-{}", session_id),
+                                        };
+
+                                        tracing::debug!("WebSocket input: {:?} -> {:?}",
+                                            data, String::from_utf8_lossy(&input_msg.data));
+
+                                        if pty_input_tx.send(input_msg).is_err() {
+                                            tracing::error!("Failed to send input to PTY");
                                             break;
                                         }
                                     }
                                 }
                                 Some("resize") => {
-                                    if let (Some(cols), Some(rows)) = (
-                                        parsed.get("cols").and_then(|c| c.as_u64()),
-                                        parsed.get("rows").and_then(|r| r.as_u64())
-                                    ) {
-                                        let pty_guard = pty.lock().await;
-                                        let _ = pty_guard.resize(portable_pty::PtySize {
-                                            rows: rows as u16,
-                                            cols: cols as u16,
-                                            pixel_width: 0,
-                                            pixel_height: 0,
-                                        });
-                                    }
+                                    // Web UI resize requests are ignored - PTY size controlled by terminal
+                                    tracing::debug!("Ignoring resize request from web UI - PTY size follows terminal");
                                 }
                                 _ => {}
                             }
@@ -251,11 +411,7 @@ async fn handle_socket(
             }
         }
     }
-    
-    // Clean up background tasks
-    pty_reader_task.abort();
-    pty_writer_task.abort();
-    
+
     tracing::info!("WebSocket connection closed for session: {}", session_id);
 }
 
@@ -277,7 +433,10 @@ async fn create_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionInfo>, String> {
     let mut manager = state.session_manager.write().await;
-    match manager.create_session(req.agent, req.args, req.project_id).await {
+    match manager
+        .create_session(req.agent, req.args, req.project_id)
+        .await
+    {
         Ok(info) => Ok(Json(info)),
         Err(e) => Err(e.to_string()),
     }
@@ -288,7 +447,8 @@ async fn get_session(
     State(state): State<AppState>,
 ) -> Result<Json<SessionInfo>, String> {
     let manager = state.session_manager.read().await;
-    manager.get_session(&id)
+    manager
+        .get_session(&id)
         .map(|info| Json(info))
         .ok_or_else(|| "Session not found".to_string())
 }
@@ -298,7 +458,9 @@ async fn delete_session(
     State(state): State<AppState>,
 ) -> Result<String, String> {
     let mut manager = state.session_manager.write().await;
-    manager.close_session(&id).await
+    manager
+        .close_session(&id)
+        .await
         .map(|_| "Session closed".to_string())
         .map_err(|e| e.to_string())
 }
@@ -310,13 +472,13 @@ async fn stream_session_jsonl(
     use std::time::Duration;
     use tokio::fs::File;
     use tokio::io::{AsyncBufReadExt, BufReader};
-    
+
     let stream = async_stream::stream! {
         // Get session info to determine the agent
         let manager = state.session_manager.read().await;
         let session_info = manager.get_session(&session_id);
         drop(manager);
-        
+
         if let Some(info) = session_info {
             // Only process Claude sessions
             if info.agent.to_lowercase() == "claude" {
@@ -330,18 +492,18 @@ async fn stream_session_jsonl(
                     // For relative paths or Windows paths, just replace slashes with dashes and add prefix
                     format!("-{}", cwd_str.replace('/', "-"))
                 };
-                
+
                 // Build path to JSONL file
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                let jsonl_path = format!("{}/.claude/projects/{}/{}.jsonl", 
+                let jsonl_path = format!("{}/.claude/projects/{}/{}.jsonl",
                     home, project_name, session_id);
-                
+
                 // Try to open the file
                 if let Ok(file) = File::open(&jsonl_path).await {
                     let mut reader = BufReader::new(file);
                     let mut line = String::new();
                     let mut last_position = 0u64;
-                    
+
                     // Read existing content first
                     loop {
                         line.clear();
@@ -358,21 +520,21 @@ async fn stream_session_jsonl(
                             }
                         }
                     }
-                    
+
                     // Now tail the file for new content
                     yield Ok(Event::default().data("[STREAMING]"));
-                    
+
                     loop {
                         tokio::time::sleep(Duration::from_millis(500)).await;
-                        
+
                         // Re-open file to check for new content
                         if let Ok(mut file) = File::open(&jsonl_path).await {
                             use tokio::io::AsyncSeekExt;
-                            
+
                             // Seek to last position
                             let _ = file.seek(std::io::SeekFrom::Start(last_position)).await;
                             let mut reader = BufReader::new(file);
-                            
+
                             loop {
                                 line.clear();
                                 match reader.read_line(&mut line).await {
@@ -398,7 +560,7 @@ async fn stream_session_jsonl(
             yield Ok(Event::default().data("Session not found"));
         }
     };
-    
+
     Sse::new(stream)
 }
 

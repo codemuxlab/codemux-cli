@@ -176,6 +176,7 @@
             background: var(--bg-primary);
             overflow: hidden;
             position: relative;
+            transition: all 0.2s ease;
         }
         
         #xterm-container {
@@ -184,6 +185,31 @@
             position: absolute;
             top: 0;
             left: 0;
+            transform-origin: top left;
+            transition: transform 0.2s ease;
+        }
+        
+        /* Original Mode - shows terminal at native size with scrollbars if needed */
+        .terminal.mode-original {
+            overflow: auto;
+        }
+        
+        .terminal.mode-original #xterm-container {
+            /* Terminal shows at original size, may require scrolling */
+            width: auto;
+            height: auto;
+            position: static;
+            transform: scale(1);
+        }
+        
+        /* Fit Mode - scales terminal to fit available space (default) */
+        .terminal.mode-fit {
+            overflow: hidden;
+        }
+        
+        .terminal.mode-fit #xterm-container {
+            /* Will be dynamically scaled to fit container */
+            transform-origin: top left;
         }
         
         .log-panel {
@@ -525,6 +551,9 @@
                 <button class="control-btn" onclick="toggleJsonl()" title="Toggle JSONL viewer" id="jsonlToggle">
                     <span>📄</span>
                 </button>
+                <button class="control-btn" onclick="toggleDisplayMode()" title="Toggle display mode" id="displayMode">
+                    <span>🔲</span>
+                </button>
                 <button class="control-btn" onclick="toggleSettings()" title="Settings">
                     <span>⚙️</span>
                 </button>
@@ -534,7 +563,7 @@
     
     <div class="main-container">
         <div class="terminal-panel">
-            <div class="terminal" id="terminal">
+            <div class="terminal mode-fit" id="terminal">
                 <div id="xterm-container"></div>
             </div>
         </div>
@@ -657,22 +686,21 @@
                 }
             });
             
-            // Handle terminal resize
+            // Terminal resize handling - web UI adapts to PTY size, doesn't control it
             term.onResize((size) => {
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({
-                        type: 'resize',
-                        cols: size.cols,
-                        rows: size.rows
-                    }));
-                }
+                // Web UI adapts to PTY size changes via terminal output
+                // No need to send resize messages to backend
             });
             
-            // Auto-resize on window resize
+            // Auto-resize on window resize (only in fit mode)
             window.addEventListener('resize', () => {
-                setTimeout(() => {
-                    fitAddon.fit();
-                }, 50);
+                if (displayMode === 'fit') {
+                    setTimeout(() => {
+                        if (fitAddon) {
+                            fitAddon.fit();
+                        }
+                    }, 50);
+                }
             });
         }
         
@@ -692,12 +720,8 @@
                 addLogEntry('Connected to ' + agentName + ' agent', 'success');
                 document.getElementById('statusText').textContent = 'Connected';
                 
-                // Force terminal resize after connection
-                setTimeout(() => {
-                    if (fitAddon) {
-                        fitAddon.fit();
-                    }
-                }, 200);
+                // Web UI will adapt to the PTY size set by the terminal
+                // No need to force resize - let the PTY size drive the display
             };
             
             ws.onmessage = (event) => {
@@ -719,15 +743,36 @@
             };
         }
         
+        let ptyRows = 30;  // Default values
+        let ptyCols = 120;
+        
         function handleMessage(data) {
             switch(data.type) {
+                case 'grid_update':
+                    // New grid-based updates from TUI
+                    handleGridUpdate(data);
+                    break;
+                    
                 case 'output':
+                    // Fallback for any remaining raw output
                     if (data.source === 'pty') {
                         // Write raw PTY output directly to xterm (preserves ANSI codes)
                         term.write(data.content);
                     } else {
                         // Route non-PTY output to logs
                         addLogEntry(data.content, data.source === 'system' ? 'info' : 'info');
+                    }
+                    break;
+                    
+                case 'pty_size':
+                    // Backend is telling us the actual PTY dimensions
+                    ptyRows = data.rows;
+                    ptyCols = data.cols;
+                    console.log(`PTY size updated: ${ptyCols}x${ptyRows}`);
+                    
+                    // If in original mode, resize terminal to match PTY size
+                    if (displayMode === 'original') {
+                        term.resize(ptyCols, ptyRows);
                     }
                     break;
                 case 'prompt':
@@ -741,6 +786,71 @@
         
         function clearTerminal() {
             term.clear();
+        }
+        
+        function handleGridUpdate(data) {
+            try {
+                // Update terminal size if needed
+                if (data.size && (data.size.rows !== ptyRows || data.size.cols !== ptyCols)) {
+                    ptyRows = data.size.rows;
+                    ptyCols = data.size.cols;
+                    console.log(`Grid size updated: ${ptyCols}x${ptyRows}`);
+                    
+                    if (displayMode === 'original') {
+                        term.resize(ptyCols, ptyRows);
+                    }
+                }
+                
+                // Apply cell changes using xterm.js buffer write
+                if (data.cells && data.cells.length > 0) {
+                    const buffer = term.buffer.active;
+                    
+                    for (const [row, col, cell] of data.cells) {
+                        // Ensure we're within bounds
+                        if (row < buffer.length && col < buffer.getLine(row).length) {
+                            // For now, reconstruct ANSI escape sequences for the cell
+                            // This is a simplified approach - could be optimized
+                            let ansiSequence = '';
+                            
+                            // Set colors
+                            if (cell.fg_color) {
+                                ansiSequence += `\x1b[38;2;${hexToRgb(cell.fg_color)}m`;
+                            }
+                            if (cell.bg_color) {
+                                ansiSequence += `\x1b[48;2;${hexToRgb(cell.bg_color)}m`;
+                            }
+                            
+                            // Set text attributes  
+                            if (cell.bold) ansiSequence += '\x1b[1m';
+                            if (cell.italic) ansiSequence += '\x1b[3m';
+                            if (cell.underline) ansiSequence += '\x1b[4m';
+                            
+                            // Add the character and reset
+                            ansiSequence += cell.char + '\x1b[0m';
+                            
+                            // Position cursor and write
+                            term.write(`\x1b[${row + 1};${col + 1}H${ansiSequence}`);
+                        }
+                    }
+                }
+                
+                // Update cursor position
+                if (data.cursor) {
+                    term.write(`\x1b[${data.cursor.row + 1};${data.cursor.col + 1}H`);
+                }
+                
+            } catch (error) {
+                console.error('Error handling grid update:', error);
+                addLogEntry('Grid update error: ' + error.message, 'error');
+            }
+        }
+        
+        function hexToRgb(hex) {
+            // Convert hex color like "#ff0000" to "255;0;0" format for ANSI
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? 
+                `${parseInt(result[1], 16)};${parseInt(result[2], 16)};${parseInt(result[3], 16)}` : 
+                '255;255;255';
         }
         
         function addLogEntry(message, type = 'info') {
@@ -778,9 +888,9 @@
                 document.getElementById('logsToggle').style.background = '';
             }
             
-            // Resize terminal after panel toggle
+            // Resize terminal after panel toggle (only in fit mode)
             setTimeout(() => {
-                if (fitAddon) {
+                if (displayMode === 'fit' && fitAddon) {
                     fitAddon.fit();
                 }
             }, 350);
@@ -806,9 +916,9 @@
                 document.getElementById('jsonlToggle').style.background = '';
             }
             
-            // Resize terminal after panel toggle
+            // Resize terminal after panel toggle (only in fit mode)
             setTimeout(() => {
-                if (fitAddon) {
+                if (displayMode === 'fit' && fitAddon) {
                     fitAddon.fit();
                 }
             }, 350);
@@ -1252,6 +1362,42 @@
                 
                 // Input will be echoed by the terminal naturally
                 input.value = '';
+            }
+        }
+        
+        let displayMode = 'fit'; // Default to fit mode
+        
+        function toggleDisplayMode() {
+            const terminal = document.getElementById('terminal');
+            const displayButton = document.getElementById('displayMode');
+            
+            if (displayMode === 'fit') {
+                // Switch to original mode
+                displayMode = 'original';
+                terminal.className = 'terminal mode-original';
+                displayButton.innerHTML = '<span>📏</span>';
+                displayButton.title = 'Switch to fit mode';
+                
+                // In original mode, set terminal to exact PTY dimensions
+                term.resize(ptyCols, ptyRows);
+                
+                // Remove any transform scaling
+                const container = document.getElementById('xterm-container');
+                container.style.transform = 'scale(1)';
+                
+            } else {
+                // Switch to fit mode
+                displayMode = 'fit';
+                terminal.className = 'terminal mode-fit';
+                displayButton.innerHTML = '<span>🔲</span>';
+                displayButton.title = 'Switch to original mode';
+                
+                // In fit mode, re-enable fitAddon to scale to available space
+                setTimeout(() => {
+                    if (fitAddon) {
+                        fitAddon.fit();
+                    }
+                }, 100);
             }
         }
         

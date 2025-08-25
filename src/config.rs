@@ -35,11 +35,11 @@ impl Default for Config {
         agents.insert("aider".to_string());
         agents.insert("cursor".to_string());
         agents.insert("continue".to_string());
-        
+
         let data_dir = directories::ProjectDirs::from("com", "codemux", "codemux")
             .map(|dirs| dirs.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from(".codemux"));
-        
+
         Config {
             whitelist: AgentWhitelist { agents },
             daemon: DaemonConfig {
@@ -47,9 +47,7 @@ impl Default for Config {
                 data_dir: data_dir.clone(),
                 pid_file: data_dir.join("daemon.pid"),
             },
-            web: WebConfig {
-                static_dir: None,
-            },
+            web: WebConfig { static_dir: None },
         }
     }
 }
@@ -66,7 +64,7 @@ impl Config {
         }
         Ok(Config::default())
     }
-    
+
     pub fn _save(&self) -> Result<()> {
         if let Some(config_dir) = directories::ProjectDirs::from("com", "codemux", "codemux") {
             std::fs::create_dir_all(config_dir.config_dir())?;
@@ -76,7 +74,7 @@ impl Config {
         }
         Ok(())
     }
-    
+
     pub fn is_agent_allowed(&self, agent: &str) -> bool {
         self.whitelist.agents.contains(agent)
     }

@@ -47,7 +47,7 @@ impl SessionManager {
             final_args.push("--session-id".to_string());
             final_args.push(session_id.clone());
         }
-        
+
         if let Some(proj_id) = &project_id {
             if let Some(project) = self.projects.get(proj_id) {
                 std::env::set_current_dir(&project.path)?;

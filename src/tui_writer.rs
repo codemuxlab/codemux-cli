@@ -22,7 +22,7 @@ impl LogLevel {
             _ => LogLevel::Info, // Default fallback
         }
     }
-    
+
     pub fn as_str(&self) -> &'static str {
         match self {
             LogLevel::Error => "ERROR",
@@ -56,13 +56,13 @@ impl TuiWriter {
 impl io::Write for TuiWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let log_text = String::from_utf8_lossy(buf);
-        
+
         // Parse the tracing output format
         // Expected format: "2025-08-24T16:43:07.498408Z ERROR codemux::web: WebSocket: Session ... not found"
         if let Some(parsed) = parse_tracing_line(&log_text) {
             let _ = self.sender.send(parsed);
         }
-        
+
         Ok(buf.len())
     }
 
@@ -73,7 +73,7 @@ impl io::Write for TuiWriter {
 
 impl<'a> MakeWriter<'a> for TuiWriter {
     type Writer = Self;
-    
+
     fn make_writer(&'a self) -> Self::Writer {
         self.clone()
     }
@@ -143,9 +143,10 @@ mod tests {
 
     #[test]
     fn test_parse_tracing_line() {
-        let line = "2025-08-24T16:43:07.498408Z ERROR codemux::web: WebSocket: Session abc not found";
+        let line =
+            "2025-08-24T16:43:07.498408Z ERROR codemux::web: WebSocket: Session abc not found";
         let parsed = parse_tracing_line(line).unwrap();
-        
+
         assert_eq!(parsed.level, LogLevel::Error);
         assert_eq!(parsed.message, "WebSocket: Session abc not found");
     }
@@ -154,7 +155,7 @@ mod tests {
     fn test_parse_simple_line() {
         let line = "A simple log message with multiple words";
         let parsed = parse_tracing_line(line).unwrap();
-        
+
         assert_eq!(parsed.level, LogLevel::Info);
         assert_eq!(parsed.message, "A simple log message with multiple words");
     }

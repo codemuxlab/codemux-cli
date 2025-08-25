@@ -1,6 +1,7 @@
 mod config;
 mod prompt_detector;
 mod pty;
+mod pty_session;
 mod session;
 mod tui;
 mod tui_writer;
@@ -11,10 +12,12 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use config::Config;
+use pty_session::PtySession;
 use session::SessionManager;
-use tui::{SessionTui, SessionInfo as TuiSessionInfo};
+use tui::{SessionInfo as TuiSessionInfo, SessionTui};
 use tui_writer::TuiWriter;
 
 #[derive(Parser, Debug)]
@@ -65,22 +68,25 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = Config::load()?;
-    
+
     // Configure tracing differently for run vs daemon mode
     let tui_writer_and_rx = if matches!(&cli.command, Commands::Run { .. }) {
         // For run mode, create TUI writer
         let (tui_writer, log_rx) = TuiWriter::new();
-        
+
         tracing_subscriber::fmt()
             .with_writer(tui_writer)
             .with_ansi(false) // No ANSI colors in output
             .init();
-        
+
         if matches!(&cli.command, Commands::Run { debug: true, .. }) {
             let debug_log_path = std::env::temp_dir().join("codemux-debug.log");
-            println!("🐛 Debug mode enabled - logs will also be written to: {:?}", debug_log_path);
+            println!(
+                "🐛 Debug mode enabled - logs will also be written to: {:?}",
+                debug_log_path
+            );
         }
-        
+
         Some(log_rx)
     } else {
         // For daemon and other modes, use stderr normally
@@ -89,10 +95,15 @@ async fn main() -> Result<()> {
             .init();
         None
     };
-    
+
     // Initialize logging differently based on mode
     match cli.command {
-        Commands::Run { agent, port, debug, args } => {
+        Commands::Run {
+            agent,
+            port,
+            debug,
+            args,
+        } => {
             if let Some(log_rx) = tui_writer_and_rx {
                 run_quick_session(config, agent, port, debug, args, log_rx).await?;
             } else {
@@ -113,66 +124,113 @@ async fn main() -> Result<()> {
             stop_daemon().await?;
         }
     }
-    
+
     Ok(())
 }
 
-async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool, args: Vec<String>, log_rx: tokio::sync::mpsc::UnboundedReceiver<tui_writer::LogEntry>) -> Result<()> {
+async fn run_quick_session(
+    config: Config,
+    agent: String,
+    port: u16,
+    debug: bool,
+    args: Vec<String>,
+    log_rx: tokio::sync::mpsc::UnboundedReceiver<tui_writer::LogEntry>,
+) -> Result<()> {
     if !config.is_agent_allowed(&agent) {
-        anyhow::bail!("Code agent '{}' is not whitelisted. Add it to the config to use.", agent);
+        anyhow::bail!(
+            "Code agent '{}' is not whitelisted. Add it to the config to use.",
+            agent
+        );
     }
-    
+
     tracing::info!("Starting {} with args: {:?}", agent, args);
-    
+
     // Create a temporary session manager
     let session_manager = Arc::new(RwLock::new(SessionManager::new(config.clone())));
-    
-    // Start web server in background with run mode UI
+
+    // Create broadcast channel for grid updates
+    let (grid_broadcast_tx, _grid_broadcast_rx) = tokio::sync::broadcast::channel(1000);
+
+    // Create PTY session directly (not through SessionManager)
+    let final_args = args;
+    let session_id = Uuid::new_v4().to_string();
+
+    // Add session ID to args if the agent is Claude
+    let mut agent_args = final_args.clone();
+    if agent.to_lowercase() == "claude" {
+        agent_args.push("--session-id".to_string());
+        agent_args.push(session_id.clone());
+    }
+
+    let (mut pty_session, pty_channels) =
+        PtySession::new(session_id.clone(), agent.clone(), agent_args)?;
+
+    // Start the PTY session
+    pty_session.start().await?;
+
+    // Start web server in background with run mode UI and PTY channels
     let manager_clone = session_manager.clone();
     let agent_clone = agent.clone();
+    let grid_rx_for_web = grid_broadcast_tx.subscribe();
+    let pty_channels_for_web = pty_channels.clone();
     tokio::spawn(async move {
-        if let Err(e) = web::start_web_server_run_mode(port, manager_clone, agent_clone).await {
+        if let Err(e) = web::start_web_server_run_mode(
+            port,
+            manager_clone,
+            agent_clone,
+            grid_rx_for_web,
+            pty_channels_for_web,
+        )
+        .await
+        {
             tracing::error!("Web server error: {}", e);
         }
     });
-    
-    // Create the session
-    let final_args = args;
-    
-    let mut manager = session_manager.write().await;
-    let session_info = manager.create_session(agent, final_args, None).await?;
-    drop(manager); // Release the lock
-    
+
+    // Keep PTY session alive by moving it to a task
+    tokio::spawn(async move {
+        // PTY session will run until dropped
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+    });
+
     // Create TUI session info
     let tui_session_info = TuiSessionInfo {
-        id: session_info.id.clone(),
-        agent: session_info.agent.clone(),
+        id: session_id.clone(),
+        agent: agent.clone(),
         _port: port,
         working_dir: std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("unknown"))
             .display()
             .to_string(),
-        url: format!("http://localhost:{}/?session={}&agent={}", port, session_info.id, session_info.agent),
+        url: format!(
+            "http://localhost:{}/?session={}&agent={}",
+            port, session_id, agent
+        ),
     };
-    
+
     // Print session info
-    println!("\n🚀 CodeMux - {} Agent Session", session_info.agent.to_uppercase());
-    println!("📋 Session ID: {}", session_info.id);
+    println!("\n🚀 CodeMux - {} Agent Session", agent.to_uppercase());
+    println!("📋 Session ID: {}", session_id);
     println!("🌐 Web Interface: {}", tui_session_info.url);
     println!("📁 Working Directory: {}", tui_session_info.working_dir);
-    
+
     // Note for Claude sessions
-    if session_info.agent.to_lowercase() == "claude" {
-        println!("💡 Claude will use session ID: {}", session_info.id);
+    if agent.to_lowercase() == "claude" {
+        println!("💡 Claude will use session ID: {}", session_id);
         let project_path = if tui_session_info.working_dir.starts_with('/') {
             format!("-{}", tui_session_info.working_dir[1..].replace('/', "-"))
         } else {
             format!("-{}", tui_session_info.working_dir.replace('/', "-"))
         };
-        println!("   History will be in: ~/.claude/projects/{}/", project_path);
+        println!(
+            "   History will be in: ~/.claude/projects/{}/",
+            project_path
+        );
     }
-    
-    // Open URL automatically  
+
+    // Open URL automatically
     println!("\n🔄 Opening web interface...");
     if let Err(e) = open::that(&tui_session_info.url) {
         println!("⚠️  Could not auto-open browser: {}", e);
@@ -180,18 +238,22 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
     } else {
         println!("✅ Web interface opened in your default browser");
     }
-    
+
     // Try to start TUI, fall back to simple display if it fails
     match SessionTui::new(debug) {
         Ok(mut tui) => {
-            // Set session context for PTY interaction
-            tui.set_session_context(session_manager.clone(), session_info.id.clone());
-            
+            // Set PTY channels for the new architecture
+            tui.set_pty_channels(pty_channels);
+
+            // Set up WebSocket broadcast channel
+            tui.set_websocket_broadcast(grid_broadcast_tx.clone());
+
+            // Initial PTY resize using channels
+            // TODO: Implement resize via channels instead of direct PTY access
+
             // Run TUI in a separate task
-            let tui_handle = tokio::spawn(async move {
-                tui.run(tui_session_info, log_rx).await
-            });
-            
+            let tui_handle = tokio::spawn(async move { tui.run(tui_session_info, log_rx).await });
+
             // Wait for either Ctrl+C or TUI to exit
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
@@ -206,7 +268,7 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
                     }
                 }
             }
-            
+
             // TUI has cleaned up, now safe to print
             eprintln!("\nShutting down...");
         }
@@ -217,38 +279,37 @@ async fn run_quick_session(config: Config, agent: String, port: u16, debug: bool
             eprintln!("│  ⚡ Status: Running                     │");
             eprintln!("│  🌐 Web UI: {:<23} │", tui_session_info.url);
             eprintln!("└─────────────────────────────────────────┘");
-            
+
             // Simple fallback - just wait for Ctrl+C
             tokio::signal::ctrl_c().await?;
             eprintln!("\nShutting down...");
         }
     }
-    
-    // Clean up session
-    let mut manager = session_manager.write().await;
-    let _ = manager.close_session(&session_info.id).await;
-    
+
+    // Clean up session - PTY session will be cleaned up when dropped
+    tracing::info!("Session {} finished", session_id);
+
     Ok(())
 }
 
 async fn start_daemon(config: Config, port: u16) -> Result<()> {
     tracing::info!("Starting daemon on port {}", port);
-    
+
     // Create daemon PID file
     let pid_file = &config.daemon.pid_file;
     if pid_file.exists() {
         anyhow::bail!("Daemon already running (PID file exists). Run 'codemux stop' first.");
     }
-    
+
     // Create data directory if needed
     std::fs::create_dir_all(&config.daemon.data_dir)?;
-    
+
     // Write PID file
     std::fs::write(pid_file, std::process::id().to_string())?;
-    
+
     // Create session manager
     let session_manager = Arc::new(RwLock::new(SessionManager::new(config.clone())));
-    
+
     // Start web server
     let manager_clone = session_manager.clone();
     let server_handle = tokio::spawn(async move {
@@ -256,11 +317,11 @@ async fn start_daemon(config: Config, port: u16) -> Result<()> {
             tracing::error!("Web server error: {}", e);
         }
     });
-    
+
     println!("Daemon started on port {}", port);
     println!("Open http://localhost:{} to access the web interface", port);
     println!("Run 'codemux stop' to stop the daemon");
-    
+
     // Wait for shutdown signal
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
@@ -270,10 +331,10 @@ async fn start_daemon(config: Config, port: u16) -> Result<()> {
             println!("Server stopped unexpectedly");
         }
     }
-    
+
     // Clean up PID file
     let _ = std::fs::remove_file(pid_file);
-    
+
     Ok(())
 }
 
@@ -294,18 +355,18 @@ async fn list_projects() -> Result<()> {
 async fn stop_daemon() -> Result<()> {
     let config = Config::load()?;
     let pid_file = &config.daemon.pid_file;
-    
+
     if !pid_file.exists() {
         println!("Daemon is not running");
         return Ok(());
     }
-    
+
     let pid = std::fs::read_to_string(pid_file)?;
     println!("Stopping daemon (PID: {})", pid.trim());
-    
+
     // TODO: Send proper shutdown signal to daemon process
     let _ = std::fs::remove_file(pid_file);
-    
+
     println!("Daemon stopped");
     Ok(())
 }
