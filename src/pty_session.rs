@@ -350,56 +350,192 @@ impl PtySession {
 
         let processor_task = tokio::spawn(async move {
             let mut previous_grid: HashMap<(u16, u16), GridCell> = HashMap::new();
+            let mut pending_data: Vec<Vec<u8>> = Vec::new();
+            let mut last_data_time = std::time::Instant::now();
+            let debounce_delay = tokio::time::Duration::from_millis(16); // True debounce: wait for inactivity
 
-            while let Some(data) = raw_data_rx.recv().await {
-                // Update the terminal buffer (keep last 64KB for new clients)
-                {
-                    let mut buffer_guard = processor_buffer.lock().await;
-                    buffer_guard.extend_from_slice(&data);
+            loop {
+                tokio::select! {
+                    // Collect incoming data
+                    data = raw_data_rx.recv() => {
+                        match data {
+                            Some(data) => {
+                                pending_data.push(data);
+                                last_data_time = std::time::Instant::now(); // Update last activity time
+                            }
+                            None => break, // Channel closed
+                        }
+                    }
 
-                    // Keep buffer size reasonable (last 64KB of output)
-                    if buffer_guard.len() > 65536 {
-                        let drain_count = buffer_guard.len() - 65536;
-                        buffer_guard.drain(0..drain_count);
+                    // True debouncing: process after period of inactivity
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(last_data_time + debounce_delay)) => {
+                        if pending_data.is_empty() {
+                            continue;
+                        }
+
+                        // Only process if there's been no new data for the debounce period
+                        if last_data_time.elapsed() >= debounce_delay {
+                            // Process all accumulated data at once
+                            tracing::debug!("Processing {} accumulated data chunks after {}ms of inactivity",
+                                pending_data.len(), last_data_time.elapsed().as_millis());
+
+                            // First, update buffer and parse all data through VT100
+                        let mut all_data = Vec::new();
+                        for data in pending_data.drain(..) {
+                            // Update the terminal buffer
+                            {
+                                let mut buffer_guard = processor_buffer.lock().await;
+                                buffer_guard.extend_from_slice(&data);
+
+                                // Keep buffer size reasonable (last 64KB of output)
+                                if buffer_guard.len() > 65536 {
+                                    let drain_count = buffer_guard.len() - 65536;
+                                    buffer_guard.drain(0..drain_count);
+                                }
+                            }
+
+                            // Process through VT100 parser
+                            {
+                                let mut parser_guard = processor_vt_parser.lock().await;
+                                parser_guard.process(&data);
+                            }
+
+                            all_data.extend_from_slice(&data);
+                        }
+
+                        // Log first 100 chars of processed data for debugging
+                        let data_sample = String::from_utf8_lossy(&all_data[..all_data.len().min(100)]).replace('\x1b', "\\x1b");
+                        tracing::debug!("VT100 parser processed {} total bytes: '{}'", all_data.len(), data_sample);
+
+                        // Now generate a single grid update for all changes
+                        let grid_update = Self::extract_grid_changes(
+                            &processor_vt_parser,
+                            &processor_grid_state,
+                            &processor_cursor_pos,
+                            &processor_current_size,
+                            &mut previous_grid,
+                        )
+                        .await;
+
+                        if let Some(update) = &grid_update {
+                            // Categorize the types of changes for debugging
+                            match update {
+                                GridUpdateMessage::Keyframe { size, cells, cursor, .. } => {
+                                    tracing::debug!(
+                                        "Generated keyframe: {} total cells, size {}x{}, cursor: ({}, {})",
+                                        cells.len(),
+                                        size.rows,
+                                        size.cols,
+                                        cursor.0,
+                                        cursor.1
+                                    );
+                                }
+                                GridUpdateMessage::Diff { changes, cursor, .. } => {
+                                    let mut clear_changes = 0;
+                                    let mut text_changes = 0;
+                                    let mut style_changes = 0;
+
+                                    // Log first 10 changes for debugging
+                                    let mut sample_changes = Vec::new();
+
+                                    for (row, col, cell) in changes {
+                                        if cell.char == " " {
+                                            clear_changes += 1;
+                                        } else if cell.char.chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
+                                            text_changes += 1;
+                                        } else {
+                                            style_changes += 1;
+                                        }
+
+                                        // Collect sample of changes for detailed analysis
+                                        if sample_changes.len() < 10 {
+                                            let char_repr = if cell.char == " " {
+                                                "[SPACE]".to_string()
+                                            } else if cell.char.chars().any(|c| c.is_control()) {
+                                                format!("[CTRL:{:?}]", cell.char.chars().collect::<Vec<_>>())
+                                            } else {
+                                                cell.char.clone()
+                                            };
+
+                                            // Show style info for debugging
+                                            let style_info = if cell.bold || cell.italic || cell.underline || cell.fg_color.is_some() || cell.bg_color.is_some() {
+                                                format!("(b:{},i:{},u:{},fg:{:?},bg:{:?})",
+                                                    cell.bold, cell.italic, cell.underline,
+                                                    cell.fg_color, cell.bg_color)
+                                            } else {
+                                                "".to_string()
+                                            };
+
+                                            sample_changes.push(format!("({},{})='{}'{}", row, col, char_repr, style_info));
+                                        }
+                                    }
+
+                                    let cursor_info = if let Some(c) = cursor {
+                                        format!("({}, {})", c.0, c.1)
+                                    } else {
+                                        "unchanged".to_string()
+                                    };
+
+                                    tracing::debug!(
+                                        "Generated grid diff: {} total changes ({} clears, {} text, {} style), cursor: {}",
+                                        changes.len(),
+                                        clear_changes,
+                                        text_changes,
+                                        style_changes,
+                                        cursor_info
+                                    );
+
+                                    if !sample_changes.is_empty() {
+                                        tracing::debug!("Sample changes: {}", sample_changes.join(", "));
+                                    }
+
+                                    // Show which screen regions are changing most
+                                    let mut region_counts = std::collections::HashMap::new();
+                                    for (row, _col, _cell) in changes {
+                                        let region = match *row {
+                                            0..=5 => "top",
+                                            6..=15 => "upper-mid",
+                                            16..=35 => "middle",
+                                            36..=45 => "lower-mid",
+                                            _ => "bottom",
+                                        };
+                                        *region_counts.entry(region).or_insert(0) += 1;
+                                    }
+
+                                    let region_summary: Vec<String> = region_counts.iter()
+                                        .map(|(region, count)| format!("{}:{}", region, count))
+                                        .collect();
+
+                                    if !region_summary.is_empty() {
+                                        tracing::debug!("Changes by region: {}", region_summary.join(", "));
+                                    }
+                                }
+                            }
+                            let _ = processor_grid_tx.send(update.clone());
+                        } else {
+                            tracing::debug!("No grid update generated (no changes)");
+                        }
+
+                        // Update last activity time for debounce timer
+                        {
+                            let mut activity_guard = processor_last_activity.lock().await;
+                            *activity_guard = Instant::now();
+                        }
+
+                        // Send raw bytes to subscribers (for backward compatibility)
+                        if !all_data.is_empty() {
+                            let msg = PtyOutputMessage {
+                                data: all_data,
+                                timestamp: std::time::SystemTime::now(),
+                            };
+                            let _ = processor_output_tx.send(msg);
+                        }
+                        } else {
+                            // Still receiving data, keep waiting
+                            continue;
+                        }
                     }
                 }
-
-                // Process through VT100 parser
-                {
-                    let mut parser_guard = processor_vt_parser.lock().await;
-                    parser_guard.process(&data);
-                    tracing::debug!("VT100 parser processed {} bytes", data.len());
-                }
-
-                // Extract grid changes and generate update message
-                let grid_update = Self::extract_grid_changes(
-                    &processor_vt_parser,
-                    &processor_grid_state,
-                    &processor_cursor_pos,
-                    &processor_current_size,
-                    &mut previous_grid,
-                )
-                .await;
-
-                if let Some(update) = &grid_update {
-                    tracing::debug!("Generated grid update message");
-                    let _ = processor_grid_tx.send(update.clone());
-                } else {
-                    tracing::debug!("No grid update generated (no changes)");
-                }
-
-                // Update last activity time for debounce timer
-                {
-                    let mut activity_guard = processor_last_activity.lock().await;
-                    *activity_guard = Instant::now();
-                }
-
-                // Send raw bytes to subscribers (for backward compatibility)
-                let msg = PtyOutputMessage {
-                    data,
-                    timestamp: std::time::SystemTime::now(),
-                };
-                let _ = processor_output_tx.send(msg);
             }
 
             tracing::info!("PTY data processor task exiting");
@@ -497,48 +633,8 @@ impl PtySession {
             }
         });
 
-        // Create debounce timer task for automatic keyframes
-        let debounce_last_activity = last_activity.clone();
-        let debounce_vt_parser = vt_parser.clone();
-        let debounce_cursor_pos = cursor_pos.clone();
-        let debounce_current_size = current_size.clone();
-        let debounce_grid_tx = grid_tx.clone();
-
-        let debounce_task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
-            let debounce_duration = tokio::time::Duration::from_secs(3);
-
-            loop {
-                interval.tick().await;
-
-                // Check if enough time has passed since last activity
-                let should_send_keyframe = {
-                    let activity_guard = debounce_last_activity.lock().await;
-                    activity_guard.elapsed() >= debounce_duration
-                };
-
-                if should_send_keyframe {
-                    tracing::debug!("Sending debounced keyframe after 3s of inactivity");
-                    let keyframe = Self::generate_keyframe(
-                        &debounce_vt_parser,
-                        &debounce_cursor_pos,
-                        &debounce_current_size,
-                    )
-                    .await;
-
-                    if debounce_grid_tx.send(keyframe).is_err() {
-                        tracing::debug!("No subscribers for debounced keyframe");
-                        break;
-                    }
-
-                    // Update last activity to prevent rapid keyframes
-                    {
-                        let mut activity_guard = debounce_last_activity.lock().await;
-                        *activity_guard = Instant::now();
-                    }
-                }
-            }
-        });
+        // Note: Automatic keyframes removed - keyframes are only sent on client request
+        // via the request_keyframe() method to avoid unnecessary full redraws
 
         // Send a newline to Claude to wake it up and show the initial prompt
         // tracing::debug!("Sending initial newline to wake up Claude");
@@ -570,10 +666,6 @@ impl PtySession {
             result = control_task => {
                 tracing::info!("PTY control task completed");
                 result.map_err(|e| anyhow::anyhow!("Control task failed: {}", e))?;
-            }
-            result = debounce_task => {
-                tracing::info!("PTY debounce task completed");
-                result.map_err(|e| anyhow::anyhow!("Debounce task failed: {}", e))?;
             }
         }
 
@@ -613,49 +705,82 @@ impl PtySession {
         let mut current_grid = HashMap::new();
         let mut changes = Vec::new();
 
-        // Convert VT100 screen to our GridCell format - only process non-empty cells
+        // Get regions that likely changed by comparing to VT100 dirty state
+        // For performance, we'll check all cells but optimize the comparison
+        let mut cells_to_check = std::collections::HashSet::new();
+
+        // First pass: collect all positions that currently have content
         for row in 0..size.rows {
             for col in 0..size.cols {
                 if let Some(cell) = screen.cell(row, col) {
                     let content = cell.contents().to_string();
-                    
-                    // Only process cells that have visible content
                     if !content.trim().is_empty() {
-                        let grid_cell = GridCell {
-                            char: content,
-                            fg_color: Self::color_to_hex(cell.fgcolor()),
-                            bg_color: Self::color_to_hex(cell.bgcolor()),
-                            bold: cell.bold(),
-                            italic: cell.italic(),
-                            underline: cell.underline(),
-                        };
+                        cells_to_check.insert((row, col));
+                    }
+                }
+            }
+        }
 
-                        current_grid.insert((row, col), grid_cell.clone());
+        // Second pass: add all positions that previously had content (to detect cleared cells)
+        for &(row, col) in previous_grid.keys() {
+            cells_to_check.insert((row, col));
+        }
 
-                        // Check if this cell changed from previous state
-                        if let Some(prev_cell) = previous_grid.get(&(row, col)) {
-                            if prev_cell != &grid_cell {
-                                changes.push((row, col, grid_cell));
-                            }
-                        } else {
-                            // New cell (wasn't in previous grid)
+        // Third pass: process only the cells we need to check
+        for &(row, col) in &cells_to_check {
+            if let Some(cell) = screen.cell(row, col) {
+                let content = cell.contents().to_string();
+
+                if !content.trim().is_empty() {
+                    let grid_cell = GridCell {
+                        char: content,
+                        fg_color: Self::color_to_hex(cell.fgcolor()),
+                        bg_color: Self::color_to_hex(cell.bgcolor()),
+                        bold: cell.bold(),
+                        italic: cell.italic(),
+                        underline: cell.underline(),
+                    };
+
+                    current_grid.insert((row, col), grid_cell.clone());
+
+                    // Check if this cell changed from previous state
+                    if let Some(prev_cell) = previous_grid.get(&(row, col)) {
+                        if prev_cell != &grid_cell {
                             changes.push((row, col, grid_cell));
                         }
                     } else {
-                        // Cell is empty now - check if it was previously non-empty
-                        if previous_grid.contains_key(&(row, col)) {
-                            // Cell was cleared - this is a change
-                            changes.push((row, col, GridCell {
-                                char: " ".to_string(),
-                                fg_color: None,
-                                bg_color: None,
-                                bold: false,
-                                italic: false,
-                                underline: false,
-                            }));
-                        }
+                        // New cell (wasn't in previous grid)
+                        changes.push((row, col, grid_cell));
                     }
+                } else if previous_grid.contains_key(&(row, col)) {
+                    // Cell is empty now but was previously non-empty - this is a change
+                    changes.push((
+                        row,
+                        col,
+                        GridCell {
+                            char: " ".to_string(),
+                            fg_color: None,
+                            bg_color: None,
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                        },
+                    ));
                 }
+            } else if previous_grid.contains_key(&(row, col)) {
+                // Cell no longer exists but was previously present - cleared
+                changes.push((
+                    row,
+                    col,
+                    GridCell {
+                        char: " ".to_string(),
+                        fg_color: None,
+                        bg_color: None,
+                        bold: false,
+                        italic: false,
+                        underline: false,
+                    },
+                ));
             }
         }
 
@@ -688,7 +813,11 @@ impl PtySession {
         } else if !changes.is_empty() || cursor_changed {
             // Send incremental diff
             *previous_grid = current_grid;
-            tracing::debug!("Sending diff with {} changes, cursor_changed: {}", changes.len(), cursor_changed);
+            tracing::debug!(
+                "Sending diff with {} changes, cursor_changed: {}",
+                changes.len(),
+                cursor_changed
+            );
             Some(GridUpdateMessage::Diff {
                 changes,
                 cursor: if cursor_changed {

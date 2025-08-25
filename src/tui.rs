@@ -318,7 +318,7 @@ impl SessionTui {
     ) -> Result<bool> {
         tracing::info!("=== ENTERING MONITORING MODE ===");
 
-        let mut display_interval = tokio::time::interval(Duration::from_secs(1));
+        let mut display_interval = tokio::time::interval(Duration::from_secs(10));
         let mut event_stream = EventStream::new();
 
         // Initial render
@@ -566,7 +566,7 @@ impl SessionTui {
 
         // Add a periodic timer to keep the display updated
         use tokio::time::interval;
-        let mut display_interval = interval(Duration::from_secs(1));
+        let mut display_interval = interval(Duration::from_secs(10));
 
         // Add a rate limiter for PTY processing to prevent starvation
         let mut pty_throttle = interval(Duration::from_millis(16));
