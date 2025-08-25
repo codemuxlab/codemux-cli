@@ -77,7 +77,7 @@ pub enum GridUpdateMessage {
     Diff {
         changes: Vec<(u16, u16, GridCell)>, // (row, col, new_cell)
         cursor: Option<(u16, u16)>,         // new cursor position if changed
-        cursor_visible: Option<bool>,        // cursor visibility if changed
+        cursor_visible: Option<bool>,       // cursor visibility if changed
         timestamp: std::time::SystemTime,
     },
 }
@@ -423,7 +423,7 @@ impl PtySession {
                                 let screen = parser_guard.screen();
                                 let vt_cursor_visible = !screen.hide_cursor();
                                 drop(parser_guard);
-                                
+
                                 let mut cursor_vis_guard = processor_cursor_visible.lock().await;
                                 if *cursor_vis_guard != vt_cursor_visible {
                                     *cursor_vis_guard = vt_cursor_visible;
@@ -437,7 +437,7 @@ impl PtySession {
                         // Log first 100 chars of processed data for debugging
                         let data_sample = String::from_utf8_lossy(&all_data[..all_data.len().min(100)]).replace('\x1b', "\\x1b");
                         tracing::debug!("VT100 parser processed {} total bytes: '{}'", all_data.len(), data_sample);
-                        
+
                         // Track cursor after processing
                         let cursor_after = {
                             let parser_guard = processor_vt_parser.lock().await;
@@ -446,9 +446,9 @@ impl PtySession {
                             tracing::debug!("Cursor AFTER processing: ({}, {})", cursor_pos.0, cursor_pos.1);
                             cursor_pos
                         };
-                        
+
                         if cursor_before != cursor_after {
-                            tracing::debug!("Cursor moved during processing: ({}, {}) -> ({}, {})", 
+                            tracing::debug!("Cursor moved during processing: ({}, {}) -> ({}, {})",
                                 cursor_before.0, cursor_before.1, cursor_after.0, cursor_after.1);
                         }
 
@@ -616,7 +616,7 @@ impl PtySession {
                 match msg {
                     PtyControlMessage::Resize { rows, cols } => {
                         tracing::debug!("Processing resize request to {}x{}", cols, rows);
-                        
+
                         // Update PTY size
                         let new_size = PtySize {
                             rows,
@@ -624,28 +624,28 @@ impl PtySession {
                             pixel_width: 0,
                             pixel_height: 0,
                         };
-                        
+
                         {
-                            let mut pty_guard = control_pty.lock().await;
+                            let pty_guard = control_pty.lock().await;
                             if let Err(e) = pty_guard.resize(new_size) {
                                 tracing::error!("Failed to resize PTY to {}x{}: {}", cols, rows, e);
                             } else {
                                 tracing::debug!("Successfully resized PTY to {}x{}", cols, rows);
                             }
                         }
-                        
+
                         // Update current size tracking
                         {
                             let mut size_guard = control_current_size.lock().await;
                             *size_guard = new_size;
                         }
-                        
+
                         // Update VT100 parser size
                         {
                             let mut parser_guard = control_vt_parser.lock().await;
                             parser_guard.set_size(rows, cols);
                         }
-                        
+
                         // Broadcast the new size to subscribers
                         let _ = control_size_tx.send(new_size);
                     }
@@ -717,7 +717,7 @@ impl PtySession {
     /// Get the current PTY size
     pub async fn get_size(&self) -> PtySize {
         let size_guard = self.current_size.lock().await;
-        size_guard.clone()
+        *size_guard
     }
 
     /// Get session metadata
@@ -730,12 +730,10 @@ impl PtySession {
     }
 }
 
-
 impl PtySession {
-
     /// Extract grid changes from VT100 parser and generate keyframe/diff updates
     async fn extract_grid_changes(
-        agent: &str,
+        _agent: &str,
         vt_parser: &Arc<Mutex<vt100::Parser>>,
         grid_state: &Arc<Mutex<HashMap<(u16, u16), GridCell>>>,
         cursor_pos: &Arc<Mutex<(u16, u16)>>,
@@ -746,7 +744,7 @@ impl PtySession {
         let parser_guard = vt_parser.lock().await;
         let screen = parser_guard.screen();
         let size_guard = current_size.lock().await;
-        let size = size_guard.clone();
+        let size = *size_guard;
         drop(size_guard);
 
         let mut current_grid = HashMap::new();
@@ -840,20 +838,28 @@ impl PtySession {
         let vt_cursor = (screen.cursor_position().0, screen.cursor_position().1);
         let mut cursor_guard = cursor_pos.lock().await;
         let old_cursor = *cursor_guard;
-        
+
         // Use VT100 cursor position directly
         let new_cursor = vt_cursor;
-        
+
         let cursor_changed = old_cursor != new_cursor;
-        
+
         if cursor_changed {
-            tracing::debug!("Cursor position changed: ({}, {}) -> ({}, {})", 
-                old_cursor.0, old_cursor.1, new_cursor.0, new_cursor.1);
+            tracing::debug!(
+                "Cursor position changed: ({}, {}) -> ({}, {})",
+                old_cursor.0,
+                old_cursor.1,
+                new_cursor.0,
+                new_cursor.1
+            );
         } else {
-            tracing::debug!("Cursor position stable at: ({}, {})", new_cursor.0, new_cursor.1);
+            tracing::debug!(
+                "Cursor position stable at: ({}, {})",
+                new_cursor.0,
+                new_cursor.1
+            );
         }
-        
-        
+
         *cursor_guard = new_cursor;
         drop(cursor_guard);
 
@@ -864,7 +870,7 @@ impl PtySession {
         }
 
         let timestamp = std::time::SystemTime::now();
-        
+
         // Get cursor visibility
         let cursor_vis_guard = cursor_visible.lock().await;
         let is_cursor_visible = *cursor_vis_guard;
@@ -917,7 +923,7 @@ impl PtySession {
         let parser_guard = vt_parser.lock().await;
         let screen = parser_guard.screen();
         let size_guard = current_size.lock().await;
-        let size = size_guard.clone();
+        let size = *size_guard;
         drop(size_guard);
 
         let mut current_grid = HashMap::new();
@@ -945,7 +951,7 @@ impl PtySession {
         let cursor_guard = cursor_pos.lock().await;
         let cursor = *cursor_guard;
         drop(cursor_guard);
-        
+
         let cursor_vis_guard = cursor_visible.lock().await;
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);

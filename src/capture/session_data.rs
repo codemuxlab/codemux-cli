@@ -36,7 +36,7 @@ pub enum SessionEvent {
     RawPtyOutput {
         timestamp_begin: u32, // milliseconds since start when data received
         timestamp_end: u32,   // milliseconds since start when data processed
-        data: Vec<u8>,  // Raw bytes from PTY including ANSI sequences
+        data: Vec<u8>,        // Raw bytes from PTY including ANSI sequences
     },
 }
 
@@ -117,8 +117,12 @@ impl SessionRecording {
             SessionEvent::Input { timestamp, .. } => *timestamp,
             SessionEvent::Output { timestamp, .. } => *timestamp,
             SessionEvent::Resize { timestamp, .. } => *timestamp,
-            SessionEvent::GridUpdate { timestamp_begin, .. } => *timestamp_begin,
-            SessionEvent::RawPtyOutput { timestamp_begin, .. } => *timestamp_begin,
+            SessionEvent::GridUpdate {
+                timestamp_begin, ..
+            } => *timestamp_begin,
+            SessionEvent::RawPtyOutput {
+                timestamp_begin, ..
+            } => *timestamp_begin,
         }
     }
 
@@ -198,7 +202,7 @@ impl JsonlRecorder {
     pub fn new<P: AsRef<Path>>(path: P, agent: String, args: Vec<String>) -> Result<Self> {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
-        
+
         let metadata = SessionMetadata {
             agent,
             args,
@@ -207,19 +211,19 @@ impl JsonlRecorder {
             total_events: 0,
             version: "1.0".to_string(),
         };
-        
+
         // Write metadata as first line
         let metadata_json = serde_json::to_string(&metadata)?;
         writeln!(writer, "{}", metadata_json)?;
         writer.flush()?;
-        
+
         Ok(Self {
             writer,
             metadata,
             start_time: SystemTime::now(),
         })
     }
-    
+
     /// Write an event to the JSONL file
     pub fn write_event(&mut self, event: &SessionEvent) -> Result<()> {
         let event_json = serde_json::to_string(event)?;
@@ -227,7 +231,7 @@ impl JsonlRecorder {
         self.writer.flush()?;
         Ok(())
     }
-    
+
     /// Finalize the recording
     pub fn finalize(mut self) -> Result<()> {
         self.writer.flush()?;

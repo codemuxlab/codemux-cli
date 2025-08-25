@@ -99,7 +99,7 @@ impl SessionTui {
             terminal_grid: std::collections::HashMap::new(),
             terminal_cursor: (0, 0),
             terminal_cursor_visible: true, // Default to visible
-            terminal_size: (30, 120), // Default size
+            terminal_size: (30, 120),      // Default size
             pty_channels,
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),

@@ -463,7 +463,7 @@ async fn get_session(
     };
     manager
         .get_session(&id)
-        .map(|info| Json(info))
+        .map(Json)
         .ok_or_else(|| "Session not found".to_string())
 }
 
@@ -508,9 +508,9 @@ async fn stream_session_jsonl(
                 // Get current working directory and convert to dash-case for project folder
                 let cwd = std::env::current_dir().unwrap_or_default();
                 let cwd_str = cwd.to_string_lossy();
-                let project_name = if cwd_str.starts_with('/') {
+                let project_name = if let Some(stripped) = cwd_str.strip_prefix('/') {
                     // Remove leading slash, then replace remaining slashes with dashes, then add prefix dash
-                    format!("-{}", cwd_str[1..].replace('/', "-"))
+                    format!("-{}", stripped.replace('/', "-"))
                 } else {
                     // For relative paths or Windows paths, just replace slashes with dashes and add prefix
                     format!("-{}", cwd_str.replace('/', "-"))

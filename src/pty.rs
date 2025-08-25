@@ -104,7 +104,7 @@ impl PtySession {
             pixel_width: 0,
             pixel_height: 0,
         };
-        pty.resize(new_size.clone())?;
+        pty.resize(new_size)?;
         drop(pty);
 
         // Update the tracked size
@@ -116,6 +116,6 @@ impl PtySession {
 
     pub async fn get_current_size(&self) -> PtySize {
         let size = self.current_size.lock().await;
-        size.clone()
+        *size
     }
 }

@@ -251,7 +251,12 @@ impl ReplaySession {
                 // Convert Vec<GridCellWithPos> back to HashMap
                 self.terminal_grid = cells
                     .iter()
-                    .map(|cell_with_pos| ((cell_with_pos.row, cell_with_pos.col), cell_with_pos.cell.clone()))
+                    .map(|cell_with_pos| {
+                        (
+                            (cell_with_pos.row, cell_with_pos.col),
+                            cell_with_pos.cell.clone(),
+                        )
+                    })
                     .collect();
                 self.terminal_cursor = *cursor;
             }
@@ -306,8 +311,12 @@ impl ReplaySession {
             SessionEvent::Input { timestamp, .. } => *timestamp,
             SessionEvent::Output { timestamp, .. } => *timestamp,
             SessionEvent::Resize { timestamp, .. } => *timestamp,
-            SessionEvent::GridUpdate { timestamp_begin, .. } => *timestamp_begin,
-            SessionEvent::RawPtyOutput { timestamp_begin, .. } => *timestamp_begin,
+            SessionEvent::GridUpdate {
+                timestamp_begin, ..
+            } => *timestamp_begin,
+            SessionEvent::RawPtyOutput {
+                timestamp_begin, ..
+            } => *timestamp_begin,
         }
     }
 

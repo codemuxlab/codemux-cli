@@ -1,8 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::io::Write;
 use tracing_subscriber::fmt::MakeWriter;
 
 mod analyze;
@@ -15,7 +15,7 @@ use analyze::analyze_jsonl_data;
 use capture::{CaptureMode, CaptureSession};
 use replay::ReplaySession;
 use session_data::SessionRecording;
-use test_chunking::{test_vt100_chunking_strategies, load_test_data_from_jsonl};
+use test_chunking::{load_test_data_from_jsonl, test_vt100_chunking_strategies};
 
 // Error collection writer to prevent VT100 debug messages from interfering with display
 #[derive(Clone)]
@@ -90,7 +90,7 @@ enum Commands {
         /// Start playback at specific timestamp (milliseconds)
         #[arg(short, long, default_value = "0")]
         start: u32,
-            /// Auto-play on start (vs paused)
+        /// Auto-play on start (vs paused)
         #[arg(short, long)]
         auto_play: bool,
     },

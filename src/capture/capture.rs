@@ -3,14 +3,14 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::{cursor, terminal, ExecutableCommand};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use std::collections::HashMap;
-use std::io::{Read, Write, stdout};
+use std::io::{stdout, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-use crate::session_data::{GridCell, GridCellWithPos, SessionEvent, JsonlRecorder};
+use crate::session_data::{GridCell, GridCellWithPos, JsonlRecorder, SessionEvent};
 
 pub struct CaptureSession {
     agent: String,
@@ -64,7 +64,7 @@ impl CaptureSession {
         for arg in &self.args {
             cmd.arg(arg);
         }
-        
+
         // Set current working directory
         if let Ok(current_dir) = std::env::current_dir() {
             cmd.cwd(current_dir);
@@ -124,19 +124,19 @@ impl CaptureSession {
         // Task to handle raw PTY output using spawn_blocking like pty_session
         let recording_tx_output = recording_tx.clone();
         let reader_clone = reader.clone();
-        
+
         // Create channel for sending raw data from blocking reader to async processor
         let (raw_data_tx, mut raw_data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        
+
         // Create the blocking PTY reader task
-        let reader_task = tokio::task::spawn_blocking(move || {
+        let _reader_task = tokio::task::spawn_blocking(move || {
             let mut read_buffer = [0u8; 1024];
-            let mut read_count = 0u64;
+            let mut _read_count = 0u64;
 
             loop {
                 let read_result = {
                     let mut reader_guard = reader_clone.lock().expect("Failed to lock reader");
-                    read_count += 1;
+                    _read_count += 1;
                     reader_guard.read(&mut read_buffer)
                 };
 
@@ -147,7 +147,7 @@ impl CaptureSession {
                     }
                     Ok(n) => {
                         let data = read_buffer[..n].to_vec();
-                        
+
                         // Send data to async processor
                         if raw_data_tx.send(data).is_err() {
                             break;
@@ -169,7 +169,7 @@ impl CaptureSession {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
-        
+
         // Create async data processor task
         tokio::spawn(async move {
             let mut vt_parser = vt100::Parser::new(30, 120, 0);
@@ -222,7 +222,7 @@ impl CaptureSession {
                     if new_grid != grid_state {
                         let cursor_pos = screen.cursor_position();
                         let cursor = (cursor_pos.0, cursor_pos.1);
-                        
+
                         // Convert HashMap to Vec<GridCellWithPos> for JSON compatibility
                         let cells: Vec<GridCellWithPos> = new_grid
                             .iter()
@@ -232,7 +232,7 @@ impl CaptureSession {
                                 cell: cell.clone(),
                             })
                             .collect();
-                            
+
                         let event = SessionEvent::GridUpdate {
                             timestamp_begin,
                             timestamp_end,
@@ -334,7 +334,8 @@ impl CaptureSession {
 
         // Wait for recording task to complete with timeout
         let (_handle, mut completion_rx) = recording_handle;
-        match tokio::time::timeout(tokio::time::Duration::from_secs(5), completion_rx.recv()).await {
+        match tokio::time::timeout(tokio::time::Duration::from_secs(5), completion_rx.recv()).await
+        {
             Ok(_) => {
                 // Recording completed successfully
             }
@@ -345,7 +346,7 @@ impl CaptureSession {
 
         // Comprehensive terminal cleanup
         crossterm::terminal::disable_raw_mode()?;
-        
+
         // Clear the screen and reset cursor
         let mut stdout = stdout();
         stdout.execute(terminal::Clear(terminal::ClearType::All))?;
