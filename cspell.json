@@ -1,6 +1,8 @@
 {
   "words": [
     "crossterm",
-    "ratatui"
+    "ratatui",
+    "logfile",
+    "codemux"
   ]
 }

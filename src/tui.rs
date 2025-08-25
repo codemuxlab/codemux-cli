@@ -1,3 +1,5 @@
+use crate::pty_session::{PtyChannels, PtyInputMessage};
+use crate::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -6,6 +8,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures_util::StreamExt;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -14,75 +17,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::io;
-use std::io::Read;
-use tokio::time::{Duration, Instant};
-// Removed VT100 parser - now consuming grid updates from PTY session
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
-
-use crate::pty_session::{PtyChannels, PtyInputMessage};
-use crate::session::SessionManager;
-use crate::tui_writer::{LogEntry, LogLevel};
-use std::sync::Arc;
-
-/// Write a debug log message to the debug log file
-fn debug_log(debug_mode: bool, message: impl std::fmt::Display) {
-    if debug_mode {
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("codemux_debug.log")
-        {
-            use std::io::Write;
-            let _ = writeln!(
-                file,
-                "[{}] {}",
-                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                message
-            );
-        }
-    }
-}
-
-/// Convert VT100 color to CSS color string
-fn format_color(color: vt100::Color) -> String {
-    match color {
-        vt100::Color::Default => "#ffffff".to_string(),
-        vt100::Color::Idx(0) => "#000000".to_string(),
-        vt100::Color::Idx(1) => "#800000".to_string(),
-        vt100::Color::Idx(2) => "#008000".to_string(),
-        vt100::Color::Idx(3) => "#808000".to_string(),
-        vt100::Color::Idx(4) => "#000080".to_string(),
-        vt100::Color::Idx(5) => "#800080".to_string(),
-        vt100::Color::Idx(6) => "#008080".to_string(),
-        vt100::Color::Idx(7) => "#c0c0c0".to_string(),
-        vt100::Color::Idx(8) => "#808080".to_string(),
-        vt100::Color::Idx(9) => "#ff0000".to_string(),
-        vt100::Color::Idx(10) => "#00ff00".to_string(),
-        vt100::Color::Idx(11) => "#ffff00".to_string(),
-        vt100::Color::Idx(12) => "#0000ff".to_string(),
-        vt100::Color::Idx(13) => "#ff00ff".to_string(),
-        vt100::Color::Idx(14) => "#00ffff".to_string(),
-        vt100::Color::Idx(15) => "#ffffff".to_string(),
-        vt100::Color::Idx(n) if n >= 16 && n < 232 => {
-            // 216-color cube
-            let n = n - 16;
-            let r = (n / 36) * 51;
-            let g = ((n % 36) / 6) * 51;
-            let b = (n % 6) * 51;
-            format!("#{:02x}{:02x}{:02x}", r, g, b)
-        }
-        vt100::Color::Idx(n) if n >= 232 => {
-            // 24-level grayscale
-            let level = (n - 232) * 10 + 8;
-            format!("#{:02x}{:02x}{:02x}", level, level, level)
-        }
-        vt100::Color::Rgb(r, g, b) => format!("#{:02x}{:02x}{:02x}", r, g, b),
-        _ => "#ffffff".to_string(),
-    }
-}
+use std::io;
+use tokio::time::{Duration, Instant};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct GridCell {
@@ -119,22 +56,20 @@ pub struct SessionTui {
     start_time: Instant,
     interactive_mode: bool,
     status_message: String,
-    debug_mode: bool,
-    session_manager: Option<Arc<tokio::sync::RwLock<SessionManager>>>,
-    session_id: Option<String>,
     system_logs: Vec<LogEntry>,
     // Terminal state from PTY session grid updates
     terminal_grid: std::collections::HashMap<(u16, u16), crate::pty_session::GridCell>,
     terminal_cursor: (u16, u16),
     terminal_size: (u16, u16),
-    websocket_broadcast_tx: Option<tokio::sync::broadcast::Sender<String>>,
     // New channel-based PTY communication
-    pty_channels: Option<PtyChannels>,
+    pty_channels: PtyChannels,
     // Incremental rendering state
     needs_redraw: bool,
     dirty_cells: std::collections::HashSet<(u16, u16)>,
     cursor_dirty: bool,
     last_render_time: std::time::Instant,
+    // Web URL for opening browser
+    web_url: String,
 }
 
 pub struct SessionInfo {
@@ -146,12 +81,7 @@ pub struct SessionInfo {
 }
 
 impl SessionTui {
-    /// Log a debug message if debug mode is enabled
-    fn debug(&self, message: impl std::fmt::Display) {
-        debug_log(self.debug_mode, message);
-    }
-
-    pub fn new(debug_mode: bool) -> Result<Self> {
+    pub fn new(pty_channels: PtyChannels, web_url: String) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -163,37 +93,17 @@ impl SessionTui {
             start_time: Instant::now(),
             interactive_mode: false,
             status_message: "Ready - Press Ctrl+T for interactive mode".to_string(),
-            debug_mode,
-            session_manager: None,
-            session_id: None,
             system_logs: Vec::new(),
             terminal_grid: std::collections::HashMap::new(),
             terminal_cursor: (0, 0),
             terminal_size: (30, 120), // Default size
-            websocket_broadcast_tx: None,
-            pty_channels: None,
+            pty_channels,
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),
             cursor_dirty: false,
             last_render_time: std::time::Instant::now(),
+            web_url,
         })
-    }
-
-    pub fn set_session_context(
-        &mut self,
-        session_manager: Arc<tokio::sync::RwLock<SessionManager>>,
-        session_id: String,
-    ) {
-        self.session_manager = Some(session_manager);
-        self.session_id = Some(session_id);
-    }
-
-    pub fn set_websocket_broadcast(&mut self, tx: tokio::sync::broadcast::Sender<String>) {
-        self.websocket_broadcast_tx = Some(tx);
-    }
-
-    pub fn set_pty_channels(&mut self, channels: PtyChannels) {
-        self.pty_channels = Some(channels);
     }
 
     // Old VT100-based methods removed - now using grid updates from PTY session
@@ -273,14 +183,14 @@ impl SessionTui {
         if !self.needs_redraw {
             return false;
         }
-        
+
         // Always redraw immediately in interactive mode for responsiveness
         if self.interactive_mode {
             return true;
         }
-        
+
         let elapsed = self.last_render_time.elapsed().as_millis();
-        
+
         // In monitoring mode, batch updates (redraw at most every 50ms)
         // But force redraw after 200ms to prevent stuck updates
         elapsed >= 50 || elapsed >= 200
@@ -302,135 +212,47 @@ impl SessionTui {
     }
 
     async fn resize_pty_to_match_tui(&self, terminal_area: Rect) {
-        if let Some(channels) = &self.pty_channels {
-            let resize_msg = crate::pty_session::PtyControlMessage::Resize {
-                rows: terminal_area.height,
-                cols: terminal_area.width,
-            };
+        let channels = &self.pty_channels;
+        let resize_msg = crate::pty_session::PtyControlMessage::Resize {
+            rows: terminal_area.height,
+            cols: terminal_area.width,
+        };
 
-            if let Err(e) = channels.control_tx.send(resize_msg) {
-                self.debug(format!("Failed to send PTY resize command: {}", e));
-            } else {
-                self.debug(format!(
-                    "Sent PTY resize command to {}x{}",
-                    terminal_area.width, terminal_area.height
-                ));
-            }
+        if let Err(e) = channels.control_tx.send(resize_msg) {
+            tracing::warn!("Failed to send PTY resize command: {}", e);
         } else {
-            self.debug("No PTY channels available for resize");
+            tracing::debug!(
+                "Sent PTY resize command to {}x{}",
+                terminal_area.width,
+                terminal_area.height
+            );
         }
     }
 
     async fn send_input_to_pty(&self, key: &crossterm::event::KeyEvent) {
-        self.debug(format!("send_input_to_pty called with key: {:?}", key));
+        tracing::debug!("send_input_to_pty called with key: {:?}", key);
 
-        if let Some(channels) = &self.pty_channels {
-            // Convert crossterm key event to bytes for PTY
-            if let Some(input_bytes) = key_to_bytes(key) {
-                self.debug(format!(
-                    "Sending to PTY: {:?} (bytes: {:?})",
-                    key, input_bytes
-                ));
+        let channels = &self.pty_channels;
+        // Convert crossterm key event to bytes for PTY
+        if let Some(input_bytes) = key_to_bytes(key) {
+            tracing::debug!("Sending to PTY: {:?} (bytes: {:?})", key, input_bytes);
 
-                let input_msg = PtyInputMessage {
-                    data: input_bytes,
-                    client_id: "tui".to_string(),
-                };
+            let input_msg = PtyInputMessage {
+                data: input_bytes,
+                client_id: "tui".to_string(),
+            };
 
-                if let Err(e) = channels.input_tx.send(input_msg) {
-                    self.debug(format!("Failed to send input to PTY: {}", e));
-                } else {
-                    // For debugging: if this is Enter, also log that we sent a line terminator
-                    if matches!(key.code, crossterm::event::KeyCode::Enter) {
-                        self.debug("SENT ENTER - line should be processed now");
-                    }
-                }
+            if let Err(e) = channels.input_tx.send(input_msg) {
+                tracing::warn!("Failed to send input to PTY: {}", e);
             } else {
-                self.debug(format!("key_to_bytes returned None for key: {:?}", key));
+                // For debugging: if this is Enter, also log that we sent a line terminator
+                if matches!(key.code, crossterm::event::KeyCode::Enter) {
+                    tracing::debug!("SENT ENTER - line should be processed now");
+                }
             }
         } else {
-            self.debug("No PTY channels available for input");
+            tracing::debug!("key_to_bytes returned None for key: {:?}", key);
         }
-    }
-
-    async fn create_pty_output_stream(&self) -> mpsc::Receiver<Vec<u8>> {
-        let (tx, rx) = mpsc::channel(100);
-
-        if let Some(session_manager) = &self.session_manager {
-            if let Some(session_id) = &self.session_id {
-                let session_manager = session_manager.clone();
-                let session_id = session_id.clone();
-                let debug_mode = self.debug_mode;
-
-                self.debug(format!(
-                    "Creating PTY output stream for session: {}",
-                    session_id
-                ));
-
-                // Spawn a task to continuously read from PTY
-                tokio::spawn(async move {
-                    debug_log(debug_mode, "PTY reader task started");
-                    let mut buffer = [0u8; 4096];
-
-                    loop {
-                        // Get the reader in a scoped block to release manager lock quickly
-                        let reader_arc = {
-                            let manager = session_manager.read().await;
-                            if let Some(pty_session) = manager.sessions.get(&session_id) {
-                                Some(pty_session.reader.clone())
-                            } else {
-                                None
-                            }
-                        }; // manager lock is released here
-
-                        if let Some(reader_arc) = reader_arc {
-                            // Now lock the reader without holding the manager lock
-                            let mut reader = reader_arc.lock().await;
-
-                            match reader.read(&mut buffer) {
-                                Ok(0) => {
-                                    debug_log(debug_mode, "PTY reader reached EOF");
-                                    break;
-                                }
-                                Ok(n) => {
-                                    let data = buffer[..n].to_vec();
-                                    debug_log(
-                                        debug_mode,
-                                        format!(
-                                            "PTY read {} bytes, sending to channel",
-                                            data.len()
-                                        ),
-                                    );
-                                    drop(reader); // Release reader lock before sending
-                                    if tx.send(data).await.is_err() {
-                                        debug_log(
-                                            debug_mode,
-                                            "Channel receiver dropped, exiting PTY reader",
-                                        );
-                                        break; // Receiver dropped
-                                    }
-                                }
-                                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                                    // No data available right now, sleep a bit
-                                    drop(reader);
-                                    tokio::time::sleep(Duration::from_millis(10)).await;
-                                }
-                                Err(e) => {
-                                    debug_log(debug_mode, format!("PTY read error: {}", e));
-                                    drop(reader);
-                                    tokio::time::sleep(Duration::from_millis(100)).await;
-                                }
-                            }
-                        } else {
-                            debug_log(debug_mode, "Session not found in PTY reader");
-                            break;
-                        }
-                    }
-                });
-            }
-        }
-
-        rx
     }
 
     pub async fn run(
@@ -440,55 +262,40 @@ impl SessionTui {
     ) -> Result<()> {
         self.interactive_mode = false;
         self.status_message = "Ready - Press Ctrl+T for interactive mode".to_string();
-        
+
         // Perform initial PTY resize to match current terminal size
         if let Err(e) = self.initial_pty_resize().await {
-            self.debug(format!("Failed to perform initial PTY resize: {}", e));
+            tracing::warn!("Failed to perform initial PTY resize: {}", e);
         }
 
         loop {
-            tokio::select! {
-                // Handle incoming system logs
-                log_entry = log_rx.recv() => {
-                    if let Some(log_entry) = log_entry {
-                        self.add_system_log(log_entry);
-                        // Re-render to show the new log entry
-                        let uptime = self.start_time.elapsed();
-                        let _ = self.draw(&session_info, uptime);
-                    }
+            let should_quit = if self.interactive_mode {
+                self.run_interactive_mode(&session_info, &mut log_rx).await
+            } else {
+                self.run_monitoring_mode(&session_info, &mut log_rx).await
+            };
+
+            match should_quit {
+                Ok(true) => {
+                    tracing::info!("User requested quit, breaking loop");
+                    break; // User wants to quit
                 }
-
-                // Run the current mode
-                should_quit = async {
-                    if self.interactive_mode {
-                        self.run_interactive_mode(&session_info).await
-                    } else {
-                        self.run_monitoring_mode(&session_info).await
-                    }
-                } => {
-                    self.debug(format!("Mode returned: {:?}", should_quit));
-
-                    match should_quit {
-                        Ok(true) => {
-                            self.debug("User requested quit, breaking loop");
-                            break; // User wants to quit
-                        }
-                        Ok(false) => {
-                            self.debug("Mode switch, continuing loop");
-                            continue; // Mode switch, continue loop
-                        }
-                        Err(e) => {
-                            self.debug(format!("Error occurred: {:?}", e));
-                            // Ensure cleanup happens on error
-                            self.cleanup();
-                            return Err(e);
-                        }
-                    }
+                Ok(false) => {
+                    tracing::debug!("Mode switch detected, yielding to prevent infinite loop");
+                    // Just yield to let other tasks run, avoid problematic sleep
+                    tokio::task::yield_now().await;
+                    continue; // Mode switch, continue loop
+                }
+                Err(e) => {
+                    tracing::error!("Error occurred: {:?}", e);
+                    // Ensure cleanup happens on error
+                    self.cleanup();
+                    return Err(e);
                 }
             }
         }
 
-        self.debug("Exiting TUI, performing cleanup");
+        tracing::info!("Exiting TUI, performing cleanup");
         // Ensure cleanup happens on normal exit
         self.cleanup();
         Ok(())
@@ -504,37 +311,49 @@ impl SessionTui {
         let _ = self.terminal.show_cursor();
     }
 
-    async fn run_monitoring_mode(&mut self, session_info: &SessionInfo) -> Result<bool> {
-        self.debug("=== ENTERING MONITORING MODE ===");
+    async fn run_monitoring_mode(
+        &mut self,
+        session_info: &SessionInfo,
+        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::tui_writer::LogEntry>,
+    ) -> Result<bool> {
+        tracing::info!("=== ENTERING MONITORING MODE ===");
 
-        use tokio::time::interval;
-        let mut display_interval = interval(Duration::from_secs(1));
+        let mut display_interval = tokio::time::interval(Duration::from_secs(1));
         let mut event_stream = EventStream::new();
 
         // Initial render
         let uptime = self.start_time.elapsed();
-        self.draw(session_info, uptime)?;
+        match self.draw(session_info, uptime) {
+            Ok(_) => tracing::debug!("MONITORING: Initial draw succeeded"),
+            Err(e) => {
+                tracing::error!("MONITORING: Initial draw FAILED - returning error: {}", e);
+                return Err(e);
+            }
+        }
+
         self.clear_dirty_state();
 
+        tracing::debug!("MONITORING: Starting main event loop");
         loop {
+            tracing::trace!("MONITORING: iterate");
             tokio::select! {
                 biased; // Ensure keyboard events get priority over display updates
-
                 // Handle keyboard events from async stream (prioritize user input)
                 maybe_event = event_stream.next() => {
                     match maybe_event {
                         Some(Ok(Event::Key(key))) => {
                             if key.kind == KeyEventKind::Press {
-                                self.debug(format!("MONITORING MODE - Key: {:?} modifiers: {:?}", key.code, key.modifiers));
+                                tracing::debug!("MONITORING: Key pressed: {:?} modifiers: {:?}", key.code, key.modifiers);
 
                                 // Handle quit
                                 if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
+                                    tracing::info!("MONITORING: Exiting due to Ctrl+C");
                                     return Ok(true); // Signal to quit
                                 }
 
                                 // Handle toggle to interactive mode
                                 if key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                    self.debug("SWITCHING TO INTERACTIVE MODE");
+                                    tracing::info!("SWITCHING TO INTERACTIVE MODE");
 
                                     self.interactive_mode = true;
                                     self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+T to toggle off)".to_string();
@@ -553,11 +372,44 @@ impl SessionTui {
                                     // Re-render and exit to switch modes
                                     let uptime = self.start_time.elapsed();
                                     self.draw(session_info, uptime)?;
+                                    tracing::info!("MONITORING: Exiting to switch to interactive mode (Ctrl+T)");
                                     return Ok(false); // Switch modes
                                 }
 
                                 // Handle other monitoring mode keys
                                 match key.code {
+                                    KeyCode::Char('i') => {
+                                        // Switch to interactive mode
+                                        self.interactive_mode = true;
+                                        self.status_message = "Switching to interactive mode...".to_string();
+
+                                        // Get proper terminal dimensions for interactive mode
+                                        let terminal_size = self.terminal.size()?;
+                                        let terminal_area = Rect {
+                                            x: 0,
+                                            y: 1, // Account for status bar
+                                            width: terminal_size.width,
+                                            height: terminal_size.height.saturating_sub(1),
+                                        };
+                                        self.terminal_size = (terminal_area.height, terminal_area.width);
+                                        self.resize_pty_to_match_tui(terminal_area).await;
+
+                                        let uptime = self.start_time.elapsed();
+                                        self.draw(session_info, uptime)?;
+                                        tracing::info!("MONITORING: Exiting to switch to interactive mode (i key)");
+                                        return Ok(false); // Switch modes
+                                    }
+                                    KeyCode::Char('o') => {
+                                        // Open web interface
+                                        self.status_message = "Opening web interface...".to_string();
+                                        if let Err(e) = open::that(&self.web_url) {
+                                            self.status_message = format!("Failed to open browser: {}", e);
+                                        } else {
+                                            self.status_message = "Web interface opened".to_string();
+                                        }
+                                        let uptime = self.start_time.elapsed();
+                                        self.draw(session_info, uptime)?;
+                                    }
                                     KeyCode::Char('r') => {
                                         self.status_message = "Display refreshed".to_string();
                                         let uptime = self.start_time.elapsed();
@@ -568,7 +420,7 @@ impl SessionTui {
                             }
                         }
                         Some(Ok(Event::Resize(width, height))) => {
-                            self.debug(format!("Terminal resized to {}x{}", width, height));
+                            tracing::debug!("Terminal resized to {}x{}", width, height);
                             // Terminal was resized, update display
                             let uptime = self.start_time.elapsed();
                             self.draw(session_info, uptime)?;
@@ -577,12 +429,23 @@ impl SessionTui {
                             // Other events (mouse, etc.) - ignore
                         }
                         Some(Err(e)) => {
-                            self.debug(format!("Event stream error: {:?}", e));
+                            tracing::warn!("Event stream error: {:?}", e);
                             // Continue trying to read events
                         }
                         None => {
-                            self.debug("Event stream terminated");
+                            tracing::info!("Event stream terminated");
                             return Ok(true); // Exit if event stream ends
+                        }
+                    }
+                }
+
+                // Handle log entries
+                log_entry = log_rx.recv() => {
+                    if let Some(entry) = log_entry {
+                        self.system_logs.push(entry);
+                        // Keep only recent logs
+                        if self.system_logs.len() > 50 {
+                            self.system_logs.drain(0..(self.system_logs.len() - 50));
                         }
                     }
                 }
@@ -590,101 +453,163 @@ impl SessionTui {
                 // Update display every second (lower priority)
                 _ = display_interval.tick() => {
                     let uptime = self.start_time.elapsed();
-                    self.draw(session_info, uptime)?;
-
-                    self.debug(format!("DISPLAY UPDATE - uptime: {}s", uptime.as_secs()));
+                    match self.draw(session_info, uptime) {
+                        Ok(_) => {
+                            // Log less frequently - every 30 seconds
+                            if uptime.as_secs() % 30 == 0 {
+                                tracing::debug!("Display update - uptime: {}s", uptime.as_secs());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Draw failed in monitoring mode: {}", e);
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
     }
 
-    async fn run_interactive_mode(&mut self, session_info: &SessionInfo) -> Result<bool> {
-        self.debug("=== ENTERING INTERACTIVE MODE ===");
+    async fn run_interactive_mode(
+        &mut self,
+        session_info: &SessionInfo,
+        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::tui_writer::LogEntry>,
+    ) -> Result<bool> {
+        tracing::debug!("=== ENTERING INTERACTIVE MODE ===");
 
         // Request keyframe for current terminal state when entering interactive mode
-        if let Some(channels) = &self.pty_channels {
-            self.debug("Requesting keyframe for TUI interactive mode");
-            match channels.request_keyframe().await {
-                Ok(keyframe) => {
-                    self.debug("Received keyframe for TUI interactive mode");
-                    // Apply keyframe to TUI terminal state
-                    match keyframe {
-                        crate::pty_session::GridUpdateMessage::Keyframe {
-                            size,
-                            cells,
-                            cursor,
-                            ..
-                        } => {
-                            // Update terminal state from keyframe and mark for full redraw
-                            self.terminal_grid = cells;
-                            self.terminal_cursor = cursor;
-                            self.terminal_size = (size.rows, size.cols);
-                            self.mark_full_redraw();
+        let channels = &self.pty_channels;
 
-                            self.debug(format!(
-                                "Applied keyframe with {} cells, cursor at ({}, {}), size {}x{}",
+        tracing::debug!("Requesting keyframe for TUI interactive mode");
+        // Add timeout to prevent hanging
+        let keyframe_result =
+            tokio::time::timeout(Duration::from_millis(500), channels.request_keyframe()).await;
+
+        match keyframe_result {
+            Ok(Ok(keyframe)) => {
+                tracing::debug!("Received keyframe for TUI interactive mode");
+                // Apply keyframe to TUI terminal state
+                match keyframe {
+                    crate::pty_session::GridUpdateMessage::Keyframe {
+                        size,
+                        cells,
+                        cursor,
+                        ..
+                    } => {
+                        // Update terminal state from keyframe and mark for full redraw
+                        self.terminal_grid = cells;
+                        self.terminal_cursor = cursor;
+                        self.terminal_size = (size.rows, size.cols);
+                        self.mark_full_redraw();
+
+                        // Debug: Check if we have any visible content
+                        let mut non_empty_cells = 0;
+                        let mut sample_content = String::new();
+                        let mut first_10_cells = Vec::new();
+
+                        // Check first few rows for content
+                        for row in 0..5.min(size.rows) {
+                            for col in 0..20.min(size.cols) {
+                                if let Some(cell) = self.terminal_grid.get(&(row, col)) {
+                                    // Collect first 10 cells for debugging
+                                    if first_10_cells.len() < 10 {
+                                        first_10_cells.push(format!(
+                                            "({},{})='{}' ",
+                                            row,
+                                            col,
+                                            cell.char.replace('\n', "\\n").replace('\r', "\\r")
+                                        ));
+                                    }
+
+                                    if !cell.char.trim().is_empty() {
+                                        non_empty_cells += 1;
+                                        if sample_content.len() < 50 {
+                                            sample_content.push_str(&cell.char);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        tracing::debug!(
+                                "Applied keyframe: {} total cells, {} non-empty in first 5 rows, cursor=({},{}), size={}x{}",
                                 self.terminal_grid.len(),
+                                non_empty_cells,
                                 cursor.0,
                                 cursor.1,
                                 size.rows,
                                 size.cols
-                            ));
-                        }
-                        crate::pty_session::GridUpdateMessage::Diff { .. } => {
-                            self.debug("Received diff instead of keyframe (unexpected)");
-                        }
+                            );
+
+                        tracing::debug!("First 10 cells: {}", first_10_cells.join(""));
+                        tracing::debug!(
+                            "Sample visible content: '{}'",
+                            sample_content.replace('\n', "\\n")
+                        );
+                    }
+                    crate::pty_session::GridUpdateMessage::Diff { .. } => {
+                        tracing::warn!("Received diff instead of keyframe (unexpected)");
                     }
                 }
-                Err(e) => {
-                    self.debug(format!("Failed to request keyframe for TUI: {}", e));
-                }
             }
-        } else {
-            self.debug("No PTY channels available for keyframe request");
+            Ok(Err(e)) => {
+                tracing::warn!("Failed to request keyframe for TUI: {}", e);
+            }
+            Err(_timeout) => {
+                tracing::warn!("Keyframe request timed out after 500ms");
+            }
         }
 
+        tracing::debug!("Keyframe handling complete, setting up interactive mode");
         let mut event_stream = EventStream::new();
-        let mut grid_update_stream: Option<
-            tokio::sync::broadcast::Receiver<crate::pty_session::GridUpdateMessage>,
-        > = if let Some(channels) = &self.pty_channels {
-            Some(channels.grid_tx.subscribe())
-        } else {
-            self.debug("No PTY channels available, using dummy stream");
-            // Create dummy receiver that never receives anything
-            let (_, rx) =
-                tokio::sync::broadcast::channel::<crate::pty_session::GridUpdateMessage>(1);
-            Some(rx)
-        };
+        let mut grid_update_stream = self.pty_channels.grid_tx.subscribe();
 
         // Add a periodic timer to keep the display updated
         use tokio::time::interval;
         let mut display_interval = interval(Duration::from_secs(1));
 
         // Add a rate limiter for PTY processing to prevent starvation
-        let mut pty_throttle = interval(Duration::from_millis(50));
+        let mut pty_throttle = interval(Duration::from_millis(16));
 
-        // Initial render
+        // Initial render after keyframe
         let uptime = self.start_time.elapsed();
+        tracing::debug!("Performing initial draw after keyframe");
         self.draw(session_info, uptime)?;
         self.clear_dirty_state();
+        tracing::debug!("Initial draw complete, dirty state cleared");
 
         // Debug the initial terminal state
         let terminal_size = self.terminal.size()?;
-        self.debug(format!(
+        tracing::debug!(
             "Starting interactive mode loop - Terminal: {}x{}, Grid size: {}x{}",
-            terminal_size.width, terminal_size.height, self.terminal_size.1, self.terminal_size.0
-        ));
+            terminal_size.width,
+            terminal_size.height,
+            self.terminal_size.1,
+            self.terminal_size.0
+        );
 
-        self.debug("Starting interactive mode loop");
+        tracing::debug!("About to enter interactive mode main loop");
+        tracing::debug!("Starting interactive mode loop");
 
         loop {
             tokio::select! {
                 biased; // Process branches in order, ensuring timer gets a chance
 
+                // Handle log entries
+                log_entry = log_rx.recv() => {
+                    if let Some(entry) = log_entry {
+                        self.system_logs.push(entry);
+                        // Keep only recent logs
+                        if self.system_logs.len() > 50 {
+                            self.system_logs.drain(0..(self.system_logs.len() - 50));
+                        }
+                    }
+                }
+
                 // Periodic display update (also serves as heartbeat)
                 _ = display_interval.tick() => {
                     let uptime = self.start_time.elapsed();
-                    self.debug(format!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs()));
+                    tracing::debug!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs());
                     self.draw(session_info, uptime)?;
                 }
 
@@ -693,7 +618,7 @@ impl SessionTui {
                     match maybe_event {
                         Some(Ok(Event::Key(key))) => {
                             if key.kind == KeyEventKind::Press {
-                                self.debug(format!("INTERACTIVE MODE - Key: {:?} modifiers: {:?}", key.code, key.modifiers));
+                                tracing::debug!("INTERACTIVE MODE - Key: {:?} modifiers: {:?}", key.code, key.modifiers);
 
                                 // Handle quit
                                 if key.code == KeyCode::Char('c') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
@@ -702,7 +627,7 @@ impl SessionTui {
 
                                 // Handle toggle back to monitoring mode
                                 if key.code == KeyCode::Char('t') && key.modifiers.contains(event::KeyModifiers::CONTROL) {
-                                    self.debug("SWITCHING TO MONITORING MODE");
+                                    tracing::info!("SWITCHING TO MONITORING MODE");
 
                                     self.interactive_mode = false;
                                     self.status_message = "Interactive mode OFF - Press Ctrl+T to toggle on".to_string();
@@ -718,7 +643,7 @@ impl SessionTui {
                             }
                         }
                         Some(Ok(Event::Resize(width, height))) => {
-                            self.debug(format!("Terminal resized to {}x{} in interactive mode", width, height));
+                            tracing::debug!("Terminal resized to {}x{} in interactive mode", width, height);
 
                             // Update terminal size tracking
                             let terminal_area = Rect {
@@ -742,11 +667,11 @@ impl SessionTui {
                             // Other events (mouse, etc.) - ignore
                         }
                         Some(Err(e)) => {
-                            self.debug(format!("Event stream error: {:?}", e));
+                            tracing::warn!("Event stream error: {:?}", e);
                             // Continue trying to read events
                         }
                         None => {
-                            self.debug("Event stream terminated");
+                            tracing::info!("Event stream terminated");
                             return Ok(true); // Exit if event stream ends
                         }
                     }
@@ -756,11 +681,11 @@ impl SessionTui {
                 _ = pty_throttle.tick() => {
                     // Try to drain multiple grid updates at once, but limited per cycle
                     let mut updates_processed = 0;
-                    let max_updates_per_cycle = 3; // Reduced to ensure fairness
+                    let max_updates_per_cycle = 10; // Reduced to ensure fairness
 
-                    if let Some(ref mut stream) = grid_update_stream {
+                    {
                         while updates_processed < max_updates_per_cycle {
-                            match stream.try_recv() {
+                            match grid_update_stream.try_recv() {
                                 Ok(update) => {
                                     // Apply grid update to TUI terminal state
                                     match update {
@@ -771,14 +696,14 @@ impl SessionTui {
                                             self.terminal_size = (size.rows, size.cols);
                                             self.mark_full_redraw();
 
-                                            if self.debug_mode && updates_processed == 0 {
-                                                self.debug(format!("GRID KEYFRAME - {} cells, cursor: ({}, {}), size: {}x{}",
-                                                    self.terminal_grid.len(), cursor.0, cursor.1, size.rows, size.cols));
+                                            if updates_processed == 0 {
+                                                tracing::debug!("GRID KEYFRAME - {} cells, cursor: ({}, {}), size: {}x{}",
+                                                    self.terminal_grid.len(), cursor.0, cursor.1, size.rows, size.cols);
                                             }
                                         }
                                         crate::pty_session::GridUpdateMessage::Diff { changes, cursor, .. } => {
                                             let num_changes = changes.len();
-                                            
+
                                             // Collect dirty cell positions for incremental rendering
                                             let dirty_positions: Vec<(u16, u16)> = changes.iter()
                                                 .map(|(row, col, _)| (*row, *col))
@@ -798,9 +723,9 @@ impl SessionTui {
                                                 self.terminal_cursor = new_cursor;
                                             }
 
-                                            if self.debug_mode && updates_processed == 0 {
-                                                self.debug(format!("GRID DIFF - {} changes, cursor: ({}, {}), marked {} cells dirty",
-                                                    num_changes, self.terminal_cursor.0, self.terminal_cursor.1, dirty_positions.len()));
+                                            if updates_processed == 0 {
+                                                tracing::debug!("GRID DIFF - {} changes, cursor: ({}, {}), marked {} cells dirty",
+                                                    num_changes, self.terminal_cursor.0, self.terminal_cursor.1, dirty_positions.len());
                                             }
                                         }
                                     }
@@ -809,11 +734,11 @@ impl SessionTui {
                                 }
                                 Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break, // No more data available
                                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
-                                    self.debug("Grid update stream lagged, some messages may have been missed");
+                                    tracing::warn!("Grid update stream lagged, some messages may have been missed");
                                     continue; // Try to get the next message
                                 }
                                 Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
-                                    self.debug("Grid update stream closed");
+                                    tracing::info!("Grid update stream closed");
                                     break;
                                 }
                             }
@@ -822,23 +747,19 @@ impl SessionTui {
 
                     // Only redraw if we have changes and enough time has passed (batching)
                     if updates_processed > 0 && self.should_redraw_now() {
-                        if self.debug_mode {
-                            if self.dirty_cells.is_empty() && self.needs_redraw {
-                                self.debug(format!("Processed {} grid updates, performing full redraw", updates_processed));
-                            } else {
-                                self.debug(format!("Processed {} grid updates, redrawing {} dirty cells", 
-                                    updates_processed, self.dirty_cells.len()));
-                            }
+                        if self.dirty_cells.is_empty() && self.needs_redraw {
+                            tracing::debug!("Processed {} grid updates, performing full redraw", updates_processed);
+                        } else {
+                            tracing::debug!("Processed {} grid updates, redrawing {} dirty cells",
+                                updates_processed, self.dirty_cells.len());
                         }
 
                         let uptime = self.start_time.elapsed();
                         self.draw(session_info, uptime)?;
                         self.clear_dirty_state();
                     } else if updates_processed > 0 {
-                        if self.debug_mode {
-                            self.debug(format!("Processed {} grid updates, batching (dirty cells: {}, time since last: {}ms)", 
-                                updates_processed, self.dirty_cells.len(), self.last_render_time.elapsed().as_millis()));
-                        }
+                        tracing::debug!("Processed {} grid updates, batching (dirty cells: {}, time since last: {}ms)",
+                            updates_processed, self.dirty_cells.len(), self.last_render_time.elapsed().as_millis());
                     }
                 }
             }
@@ -855,12 +776,11 @@ impl SessionTui {
             // Update our terminal size tracking if it changed
             if self.terminal_size != (terminal_area_height, terminal_area_width) {
                 self.terminal_size = (terminal_area_height, terminal_area_width);
-                if self.debug_mode {
-                    self.debug(format!(
-                        "Updated terminal size to {}x{}",
-                        terminal_area_height, terminal_area_width
-                    ));
-                }
+                tracing::debug!(
+                    "Updated terminal size to {}x{}",
+                    terminal_area_height,
+                    terminal_area_width
+                );
             }
         }
 
@@ -895,6 +815,22 @@ impl SessionTui {
 
                 // PTY terminal area - render from grid state
                 let terminal_area = chunks[1];
+
+                // Debug: Log grid info before rendering
+                if terminal_grid.is_empty() {
+                    tracing::warn!("terminal_grid is empty during draw!");
+                } else {
+                    // Count non-empty cells for debugging
+                    let non_empty = terminal_grid.values()
+                        .filter(|cell| !cell.char.trim().is_empty())
+                        .count();
+                    if non_empty == 0 {
+                        tracing::warn!("All {} grid cells are empty/whitespace during draw!", terminal_grid.len());
+                    } else {
+                        tracing::debug!("Drawing {} cells, {} non-empty", terminal_grid.len(), non_empty);
+                    }
+                }
+
                 // Create terminal content from grid state
                 let terminal_content = render_terminal_from_grid(&terminal_grid, terminal_grid_size, terminal_cursor, terminal_area.height, terminal_area.width);
                 let terminal_widget = Paragraph::new(terminal_content)
@@ -936,13 +872,13 @@ impl SessionTui {
                 draw_session_info(f, content_chunks[0], session_info);
                 // Status section
                 draw_status(f, content_chunks[1], uptime, interactive_mode);
-                // System logs section  
+                // System logs section
                 draw_system_logs(f, content_chunks[2], &system_logs);
                 // Instructions
                 draw_instructions(f, content_chunks[3]);
 
                 // Footer
-                let footer = Paragraph::new("Press Ctrl+C to stop | Press Ctrl+T for interactive mode | Press 'r' to refresh")
+                let footer = Paragraph::new("Ctrl+C: Stop | i: Interactive Mode | o: Open Web | r: Refresh | Ctrl+T: Interactive Mode")
                     .style(Style::default().fg(Color::Gray))
                     .alignment(Alignment::Center)
                     .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Gray)));
@@ -976,7 +912,7 @@ fn render_terminal_from_grid(
         // Build line from grid cells
         for col in 0..std::cmp::min(grid_cols, display_width) {
             let is_cursor = (row, col) == cursor_pos;
-            
+
             if let Some(cell) = terminal_grid.get(&(row, col)) {
                 // Convert grid cell to styled content
                 let mut cell_style = Style::default()
@@ -1025,13 +961,13 @@ fn render_terminal_from_grid(
                 if is_cursor {
                     empty_style = empty_style.add_modifier(Modifier::REVERSED);
                 }
-                
+
                 // If style changed, flush current span
                 if empty_style != current_style && !current_line.is_empty() {
                     line_spans.push(Span::styled(current_line.clone(), current_style));
                     current_line.clear();
                 }
-                
+
                 current_line.push(' ');
                 current_style = empty_style;
             }
@@ -1406,9 +1342,10 @@ fn draw_instructions(f: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(Color::Cyan));
 
     let instructions = vec![
-        Line::from("1. Open the web interface URL above in your browser"),
-        Line::from("2. Interact with the AI agent through the web terminal"),
-        Line::from("3. The session will persist until you stop it here"),
+        Line::from("• Press 'i' to enter interactive mode and control the agent directly"),
+        Line::from("• Press 'o' to open the web interface in your browser"),
+        Line::from("• Press 'r' to refresh the display"),
+        Line::from("• Press Ctrl+C to stop the session"),
         Line::from(""),
         Line::from(vec![
             Span::styled(

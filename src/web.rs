@@ -20,7 +20,7 @@ use crate::session::{ProjectInfo, SessionInfo, SessionManager};
 
 #[derive(Clone)]
 pub struct AppState {
-    pub session_manager: Arc<RwLock<SessionManager>>,
+    pub session_manager: Option<Arc<RwLock<SessionManager>>>,
     pub _is_daemon_mode: bool,
     pub grid_broadcast_tx: Option<tokio::sync::broadcast::Sender<String>>,
     pub pty_channels: Option<crate::pty_session::PtyChannels>,
@@ -28,7 +28,7 @@ pub struct AppState {
 
 pub async fn start_web_server(
     port: u16,
-    session_manager: Arc<RwLock<SessionManager>>,
+    session_manager: Option<Arc<RwLock<SessionManager>>>,
 ) -> Result<()> {
     let state = AppState {
         session_manager,
@@ -60,7 +60,7 @@ pub async fn start_web_server(
 
 pub async fn start_web_server_run_mode(
     port: u16,
-    session_manager: Arc<RwLock<SessionManager>>,
+    session_manager: Option<Arc<RwLock<SessionManager>>>,
     _agent: String,
     grid_rx: tokio::sync::broadcast::Receiver<String>,
     pty_channels: crate::pty_session::PtyChannels,
@@ -416,9 +416,13 @@ async fn handle_socket(
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<Vec<SessionInfo>> {
-    let manager = state.session_manager.read().await;
-    let sessions = manager.list_sessions();
-    Json(sessions)
+    if let Some(session_manager) = state.session_manager {
+        let manager = session_manager.read().await;
+        let sessions = manager.list_sessions();
+        Json(sessions)
+    } else {
+        Json(vec![])
+    }
 }
 
 #[derive(Deserialize)]
@@ -432,7 +436,10 @@ async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionInfo>, String> {
-    let mut manager = state.session_manager.write().await;
+    let mut manager = match &state.session_manager {
+        Some(sm) => sm.write().await,
+        None => return Err("Session manager not available in run mode".to_string()),
+    };
     match manager
         .create_session(req.agent, req.args, req.project_id)
         .await
@@ -446,7 +453,10 @@ async fn get_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<SessionInfo>, String> {
-    let manager = state.session_manager.read().await;
+    let manager = match &state.session_manager {
+        Some(sm) => sm.read().await,
+        None => return Err("Session manager not available in run mode".to_string()),
+    };
     manager
         .get_session(&id)
         .map(|info| Json(info))
@@ -457,7 +467,10 @@ async fn delete_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<String, String> {
-    let mut manager = state.session_manager.write().await;
+    let mut manager = match &state.session_manager {
+        Some(sm) => sm.write().await,
+        None => return Err("Session manager not available in run mode".to_string()),
+    };
     manager
         .close_session(&id)
         .await
@@ -475,7 +488,13 @@ async fn stream_session_jsonl(
 
     let stream = async_stream::stream! {
         // Get session info to determine the agent
-        let manager = state.session_manager.read().await;
+        let manager = match &state.session_manager {
+            Some(sm) => sm.read().await,
+            None => {
+                yield Ok(Event::default().data("Session manager not available"));
+                return;
+            }
+        };
         let session_info = manager.get_session(&session_id);
         drop(manager);
 
@@ -565,7 +584,10 @@ async fn stream_session_jsonl(
 }
 
 async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectInfo>> {
-    let manager = state.session_manager.read().await;
+    let manager = match &state.session_manager {
+        Some(sm) => sm.read().await,
+        None => return Json(vec![]), // Return empty list in run mode
+    };
     let projects = manager.list_projects();
     Json(projects)
 }
@@ -580,7 +602,10 @@ async fn add_project(
     State(state): State<AppState>,
     Json(req): Json<AddProjectRequest>,
 ) -> Result<Json<ProjectInfo>, String> {
-    let mut manager = state.session_manager.write().await;
+    let mut manager = match &state.session_manager {
+        Some(sm) => sm.write().await,
+        None => return Err("Session manager not available in run mode".to_string()),
+    };
     match manager.add_project(req.name, req.path).await {
         Ok(info) => Ok(Json(info)),
         Err(e) => Err(e.to_string()),

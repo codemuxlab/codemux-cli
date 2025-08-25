@@ -136,12 +136,6 @@ pub struct PtySession {
     control_rx: mpsc::UnboundedReceiver<PtyControlMessage>,
     size_tx: broadcast::Sender<PtySize>,
     grid_tx: broadcast::Sender<GridUpdateMessage>,
-
-    // Task handles
-    reader_task: Option<tokio::task::JoinHandle<()>>,
-    input_task: Option<tokio::task::JoinHandle<()>>,
-    control_task: Option<tokio::task::JoinHandle<()>>,
-    debounce_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl PtySession {
@@ -193,7 +187,9 @@ impl PtySession {
             }
         }
 
+        tracing::info!("Spawning command: {} with args: {:?}", agent, args);
         let _child = pty_pair.slave.spawn_command(cmd)?;
+        tracing::debug!("Command spawned successfully");
 
         let _reader = pty_pair.master.try_clone_reader()?;
         let writer = pty_pair.master.take_writer()?;
@@ -240,35 +236,55 @@ impl PtySession {
             control_rx,
             size_tx,
             grid_tx,
-            reader_task: None,
-            input_task: None,
-            control_task: None,
-            debounce_task: None,
         };
 
         Ok((session, channels))
     }
 
-    /// Start the PTY session tasks
-    pub async fn start(&mut self) -> Result<()> {
-        // Start PTY reader task with VT100 parsing
-        let reader = Arc::new(Mutex::new(self.pty.lock().await.try_clone_reader()?));
-        let output_tx = self.output_tx.clone();
-        let buffer_arc = self.buffer.clone();
-        let vt_parser = self.vt_parser.clone();
-        let grid_state = self.grid_state.clone();
-        let cursor_pos = self.cursor_pos.clone();
-        let grid_tx = self.grid_tx.clone();
-        let current_size = self.current_size.clone();
-        let last_activity = self.last_activity.clone();
+    /// Start the PTY session tasks - runs until completion or error
+    pub async fn start(self) -> Result<()> {
+        tracing::info!("Starting PTY session tasks for agent: {}", self.agent);
 
-        self.reader_task = Some(tokio::spawn(async move {
+        // Extract all channels and state before creating tasks
+        let PtySession {
+            pty,
+            writer,
+            current_size,
+            buffer,
+            vt_parser,
+            grid_state,
+            cursor_pos,
+            last_activity,
+            input_rx,
+            output_tx,
+            control_rx,
+            size_tx,
+            grid_tx,
+            ..
+        } = self;
+
+        // Clone the reader for the reader task - use std::sync::Mutex for blocking context
+        let reader = Arc::new(std::sync::Mutex::new(pty.lock().await.try_clone_reader()?));
+        tracing::debug!("PTY reader cloned successfully");
+
+        // Create channel for sending raw data from blocking reader to async processor
+        let (raw_data_tx, mut raw_data_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+
+        // Create the blocking PTY reader task
+        let reader_task = tokio::task::spawn_blocking(move || {
+            tracing::debug!("PTY reader task started, beginning read loop");
             let mut read_buffer = [0u8; 1024];
-            let mut previous_grid: HashMap<(u16, u16), GridCell> = HashMap::new();
+            let mut read_count = 0u64;
 
             loop {
-                let mut reader_guard = reader.lock().await;
-                match reader_guard.read(&mut read_buffer) {
+                let read_result = {
+                    let mut reader_guard = reader.lock().expect("Failed to lock reader");
+                    read_count += 1;
+                    tracing::debug!("PTY read attempt #{}", read_count);
+                    reader_guard.read(&mut read_buffer)
+                };
+
+                match read_result {
                     Ok(0) => {
                         tracing::info!("PTY reader reached EOF");
                         break;
@@ -276,94 +292,142 @@ impl PtySession {
                     Ok(n) => {
                         let data = read_buffer[..n].to_vec();
 
-                        // Update the terminal buffer (keep last 64KB for new clients)
-                        {
-                            let mut buffer_guard = buffer_arc.lock().await;
-                            buffer_guard.extend_from_slice(&data);
+                        // Debug PTY output
+                        let data_str = String::from_utf8_lossy(&data);
+                        let printable: String = data_str
+                            .chars()
+                            .take(100)
+                            .map(|c| {
+                                if c.is_control() && c != '\n' && c != '\r' && c != '\t' {
+                                    format!("\\x{:02x}", c as u8)
+                                } else {
+                                    c.to_string()
+                                }
+                            })
+                            .collect();
+                        tracing::debug!("PTY read {} bytes: '{}'", n, printable);
 
-                            // Keep buffer size reasonable (last 64KB of output)
-                            if buffer_guard.len() > 65536 {
-                                let drain_count = buffer_guard.len() - 65536;
-                                buffer_guard.drain(0..drain_count);
-                            }
-                        }
-
-                        // Process through VT100 parser
-                        {
-                            let mut parser_guard = vt_parser.lock().await;
-                            parser_guard.process(&data);
-                        }
-
-                        // Extract grid changes and generate update message
-                        let grid_update = Self::extract_grid_changes(
-                            &vt_parser,
-                            &grid_state,
-                            &cursor_pos,
-                            &current_size,
-                            &mut previous_grid,
-                        )
-                        .await;
-
-                        if let Some(update) = grid_update {
-                            let _ = grid_tx.send(update);
-                        }
-
-                        // Update last activity time for debounce timer
-                        {
-                            let mut activity_guard = last_activity.lock().await;
-                            *activity_guard = Instant::now();
-                        }
-
-                        // Send raw bytes to subscribers (for backward compatibility)
-                        let msg = PtyOutputMessage {
-                            data,
-                            timestamp: std::time::SystemTime::now(),
-                        };
-                        if output_tx.send(msg).is_err() {
-                            break; // No more receivers
+                        // Send data to async processor
+                        if raw_data_tx.send(data).is_err() {
+                            tracing::error!("Failed to send PTY data to async processor");
+                            break;
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Error reading from PTY: {}", e);
+                        tracing::error!(
+                            "Error reading from PTY: {}, error kind: {:?}",
+                            e,
+                            e.kind()
+                        );
+                        // Don't break immediately on some recoverable errors
+                        if e.kind() == std::io::ErrorKind::Interrupted
+                            || e.kind() == std::io::ErrorKind::WouldBlock
+                        {
+                            tracing::debug!("Recoverable PTY read error, continuing");
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            continue;
+                        }
                         break;
                     }
                 }
-                drop(reader_guard);
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-            }
-        }));
 
-        // Start input handler task
-        let writer = self.writer.clone();
-        let mut input_rx = std::mem::replace(&mut self.input_rx, {
-            let (_tx, rx) = mpsc::unbounded_channel();
-            rx
+                // Small sleep to avoid busy waiting
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+
+            tracing::info!("PTY reader task exiting");
         });
 
-        self.input_task = Some(tokio::spawn(async move {
+        // Create async data processor task
+        let processor_buffer = buffer.clone();
+        let processor_vt_parser = vt_parser.clone();
+        let processor_grid_state = grid_state.clone();
+        let processor_cursor_pos = cursor_pos.clone();
+        let processor_current_size = current_size.clone();
+        let processor_last_activity = last_activity.clone();
+        let processor_output_tx = output_tx.clone();
+        let processor_grid_tx = grid_tx.clone();
+
+        let processor_task = tokio::spawn(async move {
+            let mut previous_grid: HashMap<(u16, u16), GridCell> = HashMap::new();
+
+            while let Some(data) = raw_data_rx.recv().await {
+                // Update the terminal buffer (keep last 64KB for new clients)
+                {
+                    let mut buffer_guard = processor_buffer.lock().await;
+                    buffer_guard.extend_from_slice(&data);
+
+                    // Keep buffer size reasonable (last 64KB of output)
+                    if buffer_guard.len() > 65536 {
+                        let drain_count = buffer_guard.len() - 65536;
+                        buffer_guard.drain(0..drain_count);
+                    }
+                }
+
+                // Process through VT100 parser
+                {
+                    let mut parser_guard = processor_vt_parser.lock().await;
+                    parser_guard.process(&data);
+                    tracing::debug!("VT100 parser processed {} bytes", data.len());
+                }
+
+                // Extract grid changes and generate update message
+                let grid_update = Self::extract_grid_changes(
+                    &processor_vt_parser,
+                    &processor_grid_state,
+                    &processor_cursor_pos,
+                    &processor_current_size,
+                    &mut previous_grid,
+                )
+                .await;
+
+                if let Some(update) = &grid_update {
+                    tracing::debug!("Generated grid update message");
+                    let _ = processor_grid_tx.send(update.clone());
+                } else {
+                    tracing::debug!("No grid update generated (no changes)");
+                }
+
+                // Update last activity time for debounce timer
+                {
+                    let mut activity_guard = processor_last_activity.lock().await;
+                    *activity_guard = Instant::now();
+                }
+
+                // Send raw bytes to subscribers (for backward compatibility)
+                let msg = PtyOutputMessage {
+                    data,
+                    timestamp: std::time::SystemTime::now(),
+                };
+                let _ = processor_output_tx.send(msg);
+            }
+
+            tracing::info!("PTY data processor task exiting");
+        });
+
+        // Create input handler task
+        let input_writer = writer.clone();
+        let input_task = tokio::spawn(async move {
+            let mut input_rx = input_rx;
             while let Some(msg) = input_rx.recv().await {
-                let mut writer_guard = writer.lock().await;
+                let mut writer_guard = input_writer.lock().await;
                 if let Err(e) = writer_guard.write_all(&msg.data) {
                     tracing::error!("Failed to write to PTY: {}", e);
                     break;
                 }
                 let _ = writer_guard.flush();
             }
-        }));
-
-        // Start control handler task
-        let pty = self.pty.clone();
-        let current_size = self.current_size.clone();
-        let size_tx = self.size_tx.clone();
-        let vt_parser_for_control = self.vt_parser.clone();
-        let cursor_pos_for_control = self.cursor_pos.clone();
-        // Note: grid_tx not needed for control task anymore since keyframes go directly to clients
-        let mut control_rx = std::mem::replace(&mut self.control_rx, {
-            let (_tx, rx) = mpsc::unbounded_channel();
-            rx
         });
 
-        self.control_task = Some(tokio::spawn(async move {
+        // Create control handler task
+        let control_pty = pty.clone();
+        let control_current_size = current_size.clone();
+        let control_size_tx = size_tx.clone();
+        let control_vt_parser = vt_parser.clone();
+        let control_cursor_pos = cursor_pos.clone();
+
+        let control_task = tokio::spawn(async move {
+            let mut control_rx = control_rx;
             while let Some(msg) = control_rx.recv().await {
                 match msg {
                     PtyControlMessage::Resize { rows, cols } => {
@@ -373,33 +437,33 @@ impl PtySession {
                             pixel_width: 0,
                             pixel_height: 0,
                         };
-                        
+
                         // First, try to resize the PTY
-                        let pty_guard = pty.lock().await;
-                        match pty_guard.resize(new_size.clone()) {
+                        let pty_guard = control_pty.lock().await;
+                        match pty_guard.resize(new_size) {
                             Ok(()) => {
                                 drop(pty_guard); // Release PTY lock early
-                                
+
                                 // Update tracked size
                                 {
-                                    let mut size_guard = current_size.lock().await;
-                                    *size_guard = new_size.clone();
+                                    let mut size_guard = control_current_size.lock().await;
+                                    *size_guard = new_size;
                                 }
 
                                 // CRITICAL: Update VT100 parser size to match PTY
                                 {
-                                    let mut parser_guard = vt_parser_for_control.lock().await;
+                                    let mut parser_guard = control_vt_parser.lock().await;
                                     parser_guard.set_size(rows, cols);
                                 }
 
                                 // Clear cursor position to prevent out-of-bounds issues
                                 {
-                                    let mut cursor_guard = cursor_pos_for_control.lock().await;
+                                    let mut cursor_guard = control_cursor_pos.lock().await;
                                     *cursor_guard = (0, 0);
                                 }
 
                                 // Broadcast size change to all subscribers
-                                let _ = size_tx.send(new_size);
+                                let _ = control_size_tx.send(new_size);
                                 tracing::info!("PTY successfully resized to {}x{}", cols, rows);
                             }
                             Err(e) => {
@@ -416,9 +480,9 @@ impl PtySession {
                     PtyControlMessage::RequestKeyframe { response_tx } => {
                         tracing::debug!("Keyframe requested by specific client");
                         let keyframe = Self::generate_keyframe(
-                            &vt_parser_for_control,
-                            &cursor_pos_for_control,
-                            &current_size,
+                            &control_vt_parser,
+                            &control_cursor_pos,
+                            &control_current_size,
                         )
                         .await;
 
@@ -431,16 +495,16 @@ impl PtySession {
                     }
                 }
             }
-        }));
+        });
 
-        // Start debounce timer task for automatic keyframes
-        let last_activity_for_debounce = self.last_activity.clone();
-        let vt_parser_for_debounce = self.vt_parser.clone();
-        let cursor_pos_for_debounce = self.cursor_pos.clone();
-        let current_size_for_debounce = self.current_size.clone();
-        let grid_tx_for_debounce = self.grid_tx.clone();
+        // Create debounce timer task for automatic keyframes
+        let debounce_last_activity = last_activity.clone();
+        let debounce_vt_parser = vt_parser.clone();
+        let debounce_cursor_pos = cursor_pos.clone();
+        let debounce_current_size = current_size.clone();
+        let debounce_grid_tx = grid_tx.clone();
 
-        self.debounce_task = Some(tokio::spawn(async move {
+        let debounce_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
             let debounce_duration = tokio::time::Duration::from_secs(3);
 
@@ -449,33 +513,71 @@ impl PtySession {
 
                 // Check if enough time has passed since last activity
                 let should_send_keyframe = {
-                    let activity_guard = last_activity_for_debounce.lock().await;
+                    let activity_guard = debounce_last_activity.lock().await;
                     activity_guard.elapsed() >= debounce_duration
                 };
 
                 if should_send_keyframe {
                     tracing::debug!("Sending debounced keyframe after 3s of inactivity");
                     let keyframe = Self::generate_keyframe(
-                        &vt_parser_for_debounce,
-                        &cursor_pos_for_debounce,
-                        &current_size_for_debounce,
+                        &debounce_vt_parser,
+                        &debounce_cursor_pos,
+                        &debounce_current_size,
                     )
                     .await;
 
-                    if grid_tx_for_debounce.send(keyframe).is_err() {
+                    if debounce_grid_tx.send(keyframe).is_err() {
                         tracing::debug!("No subscribers for debounced keyframe");
                         break;
                     }
 
                     // Update last activity to prevent rapid keyframes
                     {
-                        let mut activity_guard = last_activity_for_debounce.lock().await;
+                        let mut activity_guard = debounce_last_activity.lock().await;
                         *activity_guard = Instant::now();
                     }
                 }
             }
-        }));
+        });
 
+        // Send a newline to Claude to wake it up and show the initial prompt
+        // tracing::debug!("Sending initial newline to wake up Claude");
+        // {
+        //     let mut writer_guard = writer.lock().await;
+        //     if let Err(e) = writer_guard.write_all(b"\n") {
+        //         tracing::warn!("Failed to send initial newline to Claude: {}", e);
+        //     } else {
+        //         let _ = writer_guard.flush();
+        //         tracing::debug!("Initial newline sent to Claude");
+        //     }
+        // }
+
+        // Run all tasks concurrently and return when any fails or all complete
+        tracing::debug!("Starting all PTY tasks concurrently");
+        tokio::select! {
+            result = reader_task => {
+                tracing::info!("PTY reader task completed");
+                result.map_err(|e| anyhow::anyhow!("Reader task failed: {}", e))?;
+            }
+            result = processor_task => {
+                tracing::info!("PTY processor task completed");
+                result.map_err(|e| anyhow::anyhow!("Processor task failed: {}", e))?;
+            }
+            result = input_task => {
+                tracing::info!("PTY input task completed");
+                result.map_err(|e| anyhow::anyhow!("Input task failed: {}", e))?;
+            }
+            result = control_task => {
+                tracing::info!("PTY control task completed");
+                result.map_err(|e| anyhow::anyhow!("Control task failed: {}", e))?;
+            }
+            result = debounce_task => {
+                tracing::info!("PTY debounce task completed");
+                result.map_err(|e| anyhow::anyhow!("Debounce task failed: {}", e))?;
+            }
+        }
+
+        tracing::info!("PTY session completed");
         Ok(())
     }
 
@@ -511,29 +613,47 @@ impl PtySession {
         let mut current_grid = HashMap::new();
         let mut changes = Vec::new();
 
-        // Convert VT100 screen to our GridCell format
+        // Convert VT100 screen to our GridCell format - only process non-empty cells
         for row in 0..size.rows {
             for col in 0..size.cols {
                 if let Some(cell) = screen.cell(row, col) {
-                    let grid_cell = GridCell {
-                        char: cell.contents().to_string(),
-                        fg_color: Self::color_to_hex(cell.fgcolor()),
-                        bg_color: Self::color_to_hex(cell.bgcolor()),
-                        bold: cell.bold(),
-                        italic: cell.italic(),
-                        underline: cell.underline(),
-                    };
+                    let content = cell.contents().to_string();
+                    
+                    // Only process cells that have visible content
+                    if !content.trim().is_empty() {
+                        let grid_cell = GridCell {
+                            char: content,
+                            fg_color: Self::color_to_hex(cell.fgcolor()),
+                            bg_color: Self::color_to_hex(cell.bgcolor()),
+                            bold: cell.bold(),
+                            italic: cell.italic(),
+                            underline: cell.underline(),
+                        };
 
-                    current_grid.insert((row, col), grid_cell.clone());
+                        current_grid.insert((row, col), grid_cell.clone());
 
-                    // Check if this cell changed from previous state
-                    if let Some(prev_cell) = previous_grid.get(&(row, col)) {
-                        if prev_cell != &grid_cell {
+                        // Check if this cell changed from previous state
+                        if let Some(prev_cell) = previous_grid.get(&(row, col)) {
+                            if prev_cell != &grid_cell {
+                                changes.push((row, col, grid_cell));
+                            }
+                        } else {
+                            // New cell (wasn't in previous grid)
                             changes.push((row, col, grid_cell));
                         }
                     } else {
-                        // New cell (wasn't in previous grid)
-                        changes.push((row, col, grid_cell));
+                        // Cell is empty now - check if it was previously non-empty
+                        if previous_grid.contains_key(&(row, col)) {
+                            // Cell was cleared - this is a change
+                            changes.push((row, col, GridCell {
+                                char: " ".to_string(),
+                                fg_color: None,
+                                bg_color: None,
+                                bold: false,
+                                italic: false,
+                                underline: false,
+                            }));
+                        }
                     }
                 }
             }
@@ -558,6 +678,7 @@ impl PtySession {
         if previous_grid.is_empty() {
             // First update - send keyframe
             *previous_grid = current_grid.clone();
+            tracing::debug!("Sending keyframe with {} cells", current_grid.len());
             Some(GridUpdateMessage::Keyframe {
                 size: size.into(),
                 cells: current_grid,
@@ -567,6 +688,7 @@ impl PtySession {
         } else if !changes.is_empty() || cursor_changed {
             // Send incremental diff
             *previous_grid = current_grid;
+            tracing::debug!("Sending diff with {} changes, cursor_changed: {}", changes.len(), cursor_changed);
             Some(GridUpdateMessage::Diff {
                 changes,
                 cursor: if cursor_changed {
@@ -578,6 +700,7 @@ impl PtySession {
             })
         } else {
             // No changes
+            tracing::trace!("No grid changes detected");
             None
         }
     }
@@ -618,6 +741,35 @@ impl PtySession {
         let cursor_guard = cursor_pos.lock().await;
         let cursor = *cursor_guard;
         drop(cursor_guard);
+
+        // Debug keyframe generation
+        let non_empty_count = current_grid
+            .values()
+            .filter(|cell| !cell.char.trim().is_empty())
+            .count();
+        let sample_content: String = current_grid
+            .values()
+            .filter_map(|cell| {
+                if !cell.char.trim().is_empty() {
+                    Some(cell.char.as_str())
+                } else {
+                    None
+                }
+            })
+            .take(10)
+            .collect::<Vec<_>>()
+            .join("");
+
+        tracing::debug!(
+            "Generated keyframe: {} total cells, {} non-empty, size {}x{}, cursor=({},{}), sample: '{}'",
+            current_grid.len(),
+            non_empty_count,
+            size.rows,
+            size.cols,
+            cursor.0,
+            cursor.1,
+            sample_content.replace('\n', "\\n").replace('\r', "\\r")
+        );
 
         GridUpdateMessage::Keyframe {
             size: size.into(),
@@ -660,24 +812,6 @@ impl PtySession {
                 }
             }
             vt100::Color::Rgb(r, g, b) => Some(format!("#{:02x}{:02x}{:02x}", r, g, b)),
-        }
-    }
-}
-
-impl Drop for PtySession {
-    fn drop(&mut self) {
-        // Clean up background tasks
-        if let Some(task) = self.reader_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.input_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.control_task.take() {
-            task.abort();
-        }
-        if let Some(task) = self.debounce_task.take() {
-            task.abort();
         }
     }
 }
