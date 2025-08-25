@@ -374,7 +374,7 @@ impl CaptureSession {
                     bytes.extend_from_slice(c.to_string().as_bytes());
                 }
             }
-            KeyCode::Enter => bytes.extend_from_slice(b"\r\n"),
+            KeyCode::Enter => bytes.extend_from_slice(b"\r"),
             KeyCode::Tab => bytes.push(b'\t'),
             KeyCode::Backspace => bytes.push(0x7f),
             KeyCode::Delete => bytes.extend_from_slice(b"\x1b[3~"),

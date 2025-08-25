@@ -859,35 +859,65 @@
                 const terminal = document.getElementById('terminal');
                 const container = document.getElementById('xterm-container');
                 
-                // Get available space
-                const terminalRect = terminal.getBoundingClientRect();
-                const availableWidth = terminalRect.width;
-                const availableHeight = terminalRect.height;
-                
-                // Get actual character dimensions (same logic as updateTerminalContainerSize)
-                let cellWidth, cellHeight;
-                
-                if (term._core && term._core._renderService) {
-                    const charSizeService = term._core._renderService.dimensions;
-                    cellWidth = charSizeService.actualCellWidth || 9;
-                    cellHeight = charSizeService.actualCellHeight || 20;
-                } else {
-                    // Fallback to approximate values if xterm internals aren't available
-                    cellWidth = 9;
-                    cellHeight = 20;
-                }
-                
-                const terminalWidth = ptyCols * cellWidth;
-                const terminalHeight = ptyRows * cellHeight;
-                
-                // Calculate scale to fit
-                const scaleX = availableWidth / terminalWidth;
-                const scaleY = availableHeight / terminalHeight;
-                const scale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 100%
-                
-                console.log(`Scaling terminal: ${scale.toFixed(2)}x (available: ${availableWidth}x${availableHeight}, natural: ${terminalWidth}x${terminalHeight})`);
-                
-                container.style.transform = `scale(${scale})`;
+                // Wait for terminal to be fully rendered before scaling
+                requestAnimationFrame(() => {
+                    // Get available space
+                    const terminalRect = terminal.getBoundingClientRect();
+                    const availableWidth = terminalRect.width;
+                    const availableHeight = terminalRect.height;
+                    
+                    // Ensure we have valid dimensions
+                    if (availableWidth <= 0 || availableHeight <= 0) {
+                        console.log('Invalid terminal dimensions, skipping scale update');
+                        return;
+                    }
+                    
+                    // Get actual character dimensions
+                    let cellWidth, cellHeight;
+                    
+                    if (term._core && term._core._renderService) {
+                        const charSizeService = term._core._renderService.dimensions;
+                        cellWidth = charSizeService.actualCellWidth || 9;
+                        cellHeight = charSizeService.actualCellHeight || 20;
+                    } else {
+                        cellWidth = 9;
+                        cellHeight = 20;
+                    }
+                    
+                    const terminalWidth = ptyCols * cellWidth;
+                    const terminalHeight = ptyRows * cellHeight;
+                    
+                    // Calculate scale to fit with some padding
+                    const padding = 20; // Leave some padding
+                    const scaleX = (availableWidth - padding) / terminalWidth;
+                    const scaleY = (availableHeight - padding) / terminalHeight;
+                    const scale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 100%
+                    
+                    if (scale > 0 && scale < Infinity) {
+                        // Set container size to natural dimensions first
+                        container.style.width = terminalWidth + 'px';
+                        container.style.height = terminalHeight + 'px';
+                        
+                        // Calculate scaled dimensions and centering
+                        const scaledWidth = terminalWidth * scale;
+                        const scaledHeight = terminalHeight * scale;
+                        const offsetX = Math.max(0, (availableWidth - scaledWidth) / 2);
+                        const offsetY = Math.max(0, (availableHeight - scaledHeight) / 2);
+                        
+                        console.log(`Scaling terminal: ${scale.toFixed(2)}x (available: ${availableWidth}x${availableHeight}, natural: ${terminalWidth}x${terminalHeight}, scaled: ${scaledWidth}x${scaledHeight}, offset: ${offsetX},${offsetY})`);
+                        
+                        container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+                    } else {
+                        console.log('Invalid scale calculated, resetting transform');
+                        container.style.transform = '';
+                    }
+                });
+            } else if (displayMode === 'original') {
+                // In original mode, clear any scaling
+                const container = document.getElementById('xterm-container');
+                container.style.transform = '';
+                container.style.width = '100%';
+                container.style.height = '100%';
             }
         }
         
@@ -899,11 +929,17 @@
                     ptyCols = data.size.cols;
                     console.log(`Grid size updated to fixed server size: ${ptyCols}x${ptyRows}`);
                     
+                    // Clear any existing transform during resize to prevent conflicts
+                    const container = document.getElementById('xterm-container');
+                    container.style.transform = '';
+                    
                     // Always use the exact server size
                     term.resize(ptyCols, ptyRows);
                     
-                    // Update the terminal container size to match
-                    updateTerminalContainerSize();
+                    // Wait for xterm.js to complete the resize before updating container
+                    setTimeout(() => {
+                        updateTerminalContainerSize();
+                    }, 100);
                 }
                 
                 // Apply cell changes using xterm.js buffer write
@@ -1284,7 +1320,10 @@
             btn.onclick = () => sendResponse(input.value);
             
             input.onkeypress = (e) => {
-                if (e.key === 'Enter') sendResponse(input.value);
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Prevent default newline behavior
+                    sendResponse(input.value);
+                }
             };
             
             group.appendChild(input);
@@ -1424,7 +1463,10 @@
             btn.onclick = () => sendResponse(input.value);
             
             input.onkeypress = (e) => {
-                if (e.key === 'Enter') sendResponse(input.value);
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Prevent default newline behavior
+                    sendResponse(input.value);
+                }
             };
             
             group.appendChild(input);
@@ -1460,9 +1502,16 @@
             if (!message) return;
             
             if (ws && ws.readyState === WebSocket.OPEN) {
+                // First send the message text
                 ws.send(JSON.stringify({
                     type: 'input',
                     data: message
+                }));
+                
+                // Then send just carriage return to submit
+                ws.send(JSON.stringify({
+                    type: 'input',
+                    data: '\r'
                 }));
                 
                 // Input will be echoed by the terminal naturally
@@ -1470,12 +1519,17 @@
             }
         }
         
+        
         // Display mode: 'fit' scales to available space, 'original' shows actual size with scroll
         let displayMode = 'fit';
         
         function toggleDisplayMode() {
             const terminal = document.getElementById('terminal');
+            const container = document.getElementById('xterm-container');
             const btn = document.getElementById('displayModeBtn');
+            
+            // Clear any transforms when switching modes
+            container.style.transform = '';
             
             if (displayMode === 'fit') {
                 displayMode = 'original';
@@ -1490,7 +1544,9 @@
             }
             
             // Update terminal sizing for new mode
-            updateTerminalContainerSize();
+            setTimeout(() => {
+                updateTerminalContainerSize();
+            }, 50);
         }
         
         function toggleSettings() {
@@ -1509,6 +1565,7 @@
         // Quick input enter key
         document.getElementById('quickInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
+                e.preventDefault(); // Prevent default newline behavior
                 sendQuickMessage();
             }
         });

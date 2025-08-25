@@ -367,13 +367,8 @@ async fn handle_socket(
                             match parsed.get("type").and_then(|t| t.as_str()) {
                                 Some("input") => {
                                     if let Some(data) = parsed.get("data").and_then(|d| d.as_str()) {
-                                        // For web input, we need to ensure it ends with Enter (\r) so Claude processes it
-                                        let mut input_bytes = data.as_bytes().to_vec();
-
-                                        // If the input doesn't already end with a carriage return, add one
-                                        if !input_bytes.ends_with(b"\n") {
-                                            input_bytes.push(b'\n'); // Add carriage return so Claude processes the input
-                                        }
+                                        // Web input is sent as-is, text and \r are sent separately
+                                        let input_bytes = data.as_bytes().to_vec();
 
                                         let input_msg = PtyInputMessage {
                                             data: input_bytes,
