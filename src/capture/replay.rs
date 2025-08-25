@@ -248,7 +248,11 @@ impl ReplaySession {
                 ..
             } => {
                 self.terminal_size = *size;
-                self.terminal_grid = cells.clone();
+                // Convert Vec<GridCellWithPos> back to HashMap
+                self.terminal_grid = cells
+                    .iter()
+                    .map(|cell_with_pos| ((cell_with_pos.row, cell_with_pos.col), cell_with_pos.cell.clone()))
+                    .collect();
                 self.terminal_cursor = *cursor;
             }
             SessionEvent::Resize { rows, cols, .. } => {
@@ -279,6 +283,7 @@ impl ReplaySession {
                                         bold: cell.bold(),
                                         italic: cell.italic(),
                                         underline: cell.underline(),
+                                        reverse: cell.inverse(),
                                     };
                                     self.terminal_grid.insert((row, col), grid_cell);
                                 }
@@ -301,8 +306,8 @@ impl ReplaySession {
             SessionEvent::Input { timestamp, .. } => *timestamp,
             SessionEvent::Output { timestamp, .. } => *timestamp,
             SessionEvent::Resize { timestamp, .. } => *timestamp,
-            SessionEvent::GridUpdate { timestamp, .. } => *timestamp,
-            SessionEvent::RawPtyOutput { timestamp, .. } => *timestamp,
+            SessionEvent::GridUpdate { timestamp_begin, .. } => *timestamp_begin,
+            SessionEvent::RawPtyOutput { timestamp_begin, .. } => *timestamp_begin,
         }
     }
 

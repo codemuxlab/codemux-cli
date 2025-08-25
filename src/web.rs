@@ -207,6 +207,7 @@ async fn handle_socket(
                     size,
                     cells,
                     cursor,
+                    cursor_visible,
                     timestamp,
                 } => {
                     serde_json::json!({
@@ -223,6 +224,7 @@ async fn handle_socket(
                             "row": cursor.0,
                             "col": cursor.1
                         },
+                        "cursor_visible": cursor_visible,
                         "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default().as_millis()
                     })
@@ -257,7 +259,7 @@ async fn handle_socket(
                     Ok(update) => {
                         // Convert grid update to JSON format for frontend
                         let grid_json = match update {
-                            crate::pty_session::GridUpdateMessage::Keyframe { size, cells, cursor, timestamp } => {
+                            crate::pty_session::GridUpdateMessage::Keyframe { size, cells, cursor, cursor_visible, timestamp } => {
                                 serde_json::json!({
                                     "type": "grid_update",
                                     "update_type": "keyframe",
@@ -272,11 +274,12 @@ async fn handle_socket(
                                         "row": cursor.0,
                                         "col": cursor.1
                                     },
+                                    "cursor_visible": cursor_visible,
                                     "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default().as_millis()
                                 })
                             }
-                            crate::pty_session::GridUpdateMessage::Diff { changes, cursor, timestamp } => {
+                            crate::pty_session::GridUpdateMessage::Diff { changes, cursor, cursor_visible, timestamp } => {
                                 serde_json::json!({
                                     "type": "grid_update",
                                     "update_type": "diff",
@@ -287,6 +290,7 @@ async fn handle_socket(
                                         "row": row,
                                         "col": col
                                     })),
+                                    "cursor_visible": cursor_visible,
                                     "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
                                         .unwrap_or_default().as_millis()
                                 })

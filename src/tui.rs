@@ -29,6 +29,7 @@ pub struct GridCell {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub reverse: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -60,6 +61,7 @@ pub struct SessionTui {
     // Terminal state from PTY session grid updates
     terminal_grid: std::collections::HashMap<(u16, u16), crate::pty_session::GridCell>,
     terminal_cursor: (u16, u16),
+    terminal_cursor_visible: bool,
     terminal_size: (u16, u16),
     // New channel-based PTY communication
     pty_channels: PtyChannels,
@@ -96,6 +98,7 @@ impl SessionTui {
             system_logs: Vec::new(),
             terminal_grid: std::collections::HashMap::new(),
             terminal_cursor: (0, 0),
+            terminal_cursor_visible: true, // Default to visible
             terminal_size: (30, 120), // Default size
             pty_channels,
             needs_redraw: true,
@@ -494,11 +497,13 @@ impl SessionTui {
                         size,
                         cells,
                         cursor,
+                        cursor_visible,
                         ..
                     } => {
                         // Update terminal state from keyframe and mark for full redraw
                         self.terminal_grid = cells;
                         self.terminal_cursor = cursor;
+                        self.terminal_cursor_visible = cursor_visible;
                         self.terminal_size = (size.rows, size.cols);
                         self.mark_full_redraw();
 
@@ -788,6 +793,7 @@ impl SessionTui {
         let interactive_mode = self.interactive_mode;
         let terminal_grid = self.terminal_grid.clone();
         let terminal_cursor = self.terminal_cursor;
+        let cursor_visible = self.terminal_cursor_visible;
         let terminal_grid_size = self.terminal_size;
         let system_logs = self.system_logs.clone();
 
@@ -832,7 +838,7 @@ impl SessionTui {
                 }
 
                 // Create terminal content from grid state
-                let terminal_content = render_terminal_from_grid(&terminal_grid, terminal_grid_size, terminal_cursor, terminal_area.height, terminal_area.width);
+                let terminal_content = render_terminal_from_grid(&terminal_grid, terminal_grid_size, terminal_cursor, cursor_visible, terminal_area.height, terminal_area.width);
                 let terminal_widget = Paragraph::new(terminal_content)
                     .block(Block::default().borders(Borders::NONE))
                     .wrap(ratatui::widgets::Wrap { trim: false });
@@ -897,6 +903,7 @@ fn render_terminal_from_grid(
     terminal_grid: &std::collections::HashMap<(u16, u16), crate::pty_session::GridCell>,
     terminal_size: (u16, u16),
     cursor_pos: (u16, u16),
+    cursor_visible: bool,
     display_height: u16,
     display_width: u16,
 ) -> Vec<ratatui::text::Line> {
@@ -940,10 +947,15 @@ fn render_terminal_from_grid(
                         Modifier::UNDERLINED
                     } else {
                         Modifier::empty()
+                    })
+                    .add_modifier(if cell.reverse {
+                        Modifier::REVERSED
+                    } else {
+                        Modifier::empty()
                     });
 
-                // Highlight cursor position with reversed colors
-                if is_cursor {
+                // Highlight cursor position with reversed colors (only if cursor is visible)
+                if is_cursor && cursor_visible {
                     cell_style = cell_style.add_modifier(Modifier::REVERSED);
                 }
 
@@ -956,9 +968,9 @@ fn render_terminal_from_grid(
                 current_line.push_str(&cell.char);
                 current_style = cell_style;
             } else {
-                // Empty cell - use space, but highlight if cursor is here
+                // Empty cell - use space, but highlight if cursor is here and visible
                 let mut empty_style = Style::default();
-                if is_cursor {
+                if is_cursor && cursor_visible {
                     empty_style = empty_style.add_modifier(Modifier::REVERSED);
                 }
 

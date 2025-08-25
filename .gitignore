@@ -38,3 +38,5 @@ Temporary Items
 
 # Debug logs
 codemux_debug.log
+*_test.*
+*test_*.*

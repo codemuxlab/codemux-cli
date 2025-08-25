@@ -9,7 +9,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
     <style>
         * {
@@ -166,18 +165,36 @@
             flex: 1;
             display: flex;
             flex-direction: column;
+            align-items: center;
+            justify-content: center;
             background: var(--bg-primary);
-            overflow: hidden;
+            overflow: auto;
+            padding: 32px;
+            position: relative;
         }
         
         .terminal {
-            flex: 1;
-            padding: 0;
-            background: var(--bg-primary);
+            background: #000000;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 
+                0 8px 32px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
             overflow: hidden;
             position: relative;
-            transition: all 0.2s ease;
+            transition: all 0.3s ease;
+            /* Dimensions will be set dynamically by JavaScript */
         }
+        
+        .terminal:hover {
+            border-color: rgba(88, 166, 255, 0.5);
+            box-shadow: 
+                0 12px 48px rgba(0, 0, 0, 0.4),
+                0 0 0 1px rgba(88, 166, 255, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.15);
+        }
+        
+        /* Clean terminal container without window chrome */
         
         #xterm-container {
             width: 100%;
@@ -189,27 +206,29 @@
             transition: transform 0.2s ease;
         }
         
-        /* Original Mode - shows terminal at native size with scrollbars if needed */
-        .terminal.mode-original {
-            overflow: auto;
+        /* Display modes for terminal */
+        .terminal {
+            overflow: hidden;
         }
         
-        .terminal.mode-original #xterm-container {
-            /* Terminal shows at original size, may require scrolling */
-            width: auto;
-            height: auto;
-            position: static;
-            transform: scale(1);
-        }
-        
-        /* Fit Mode - scales terminal to fit available space (default) */
+        /* Fit mode - scale terminal to fit available space */
         .terminal.mode-fit {
             overflow: hidden;
         }
         
         .terminal.mode-fit #xterm-container {
-            /* Will be dynamically scaled to fit container */
+            /* Will be scaled to fit container */
             transform-origin: top left;
+        }
+        
+        /* Original mode - show terminal at actual size with scrollbars */
+        .terminal.mode-original {
+            overflow: auto;
+        }
+        
+        .terminal.mode-original #xterm-container {
+            /* Show at original size, container may scroll */
+            transform: scale(1) !important;
         }
         
         .log-panel {
@@ -551,7 +570,7 @@
                 <button class="control-btn" onclick="toggleJsonl()" title="Toggle JSONL viewer" id="jsonlToggle">
                     <span>📄</span>
                 </button>
-                <button class="control-btn" onclick="toggleDisplayMode()" title="Toggle display mode" id="displayMode">
+                <button class="control-btn" onclick="toggleDisplayMode()" title="Toggle display mode" id="displayModeBtn">
                     <span>🔲</span>
                 </button>
                 <button class="control-btn" onclick="toggleSettings()" title="Settings">
@@ -613,7 +632,7 @@
         let sessionId = null;
         let agentName = window.AGENT_NAME || 'AI';
         let term = null;
-        let fitAddon = null;
+        // Terminal size is now fixed based on server dimensions
         
         function getSessionId() {
             return sessionId;
@@ -660,10 +679,6 @@
                 logLevel: 'warn'
             });
             
-            // Add fit addon
-            fitAddon = new FitAddon.FitAddon();
-            term.loadAddon(fitAddon);
-            
             // Add web links addon
             const webLinksAddon = new WebLinksAddon.WebLinksAddon();
             term.loadAddon(webLinksAddon);
@@ -671,10 +686,8 @@
             // Open terminal in container
             term.open(document.getElementById('xterm-container'));
             
-            // Ensure proper fit after DOM is ready
-            setTimeout(() => {
-                fitAddon.fit();
-            }, 100);
+            // Terminal will be sized based on server dimensions
+            // Initial size will be set when first grid update arrives
             
             // Handle terminal input
             term.onData((data) => {
@@ -692,15 +705,9 @@
                 // No need to send resize messages to backend
             });
             
-            // Auto-resize on window resize (only in fit mode)
+            // Handle window resize for fit mode scaling
             window.addEventListener('resize', () => {
-                if (displayMode === 'fit') {
-                    setTimeout(() => {
-                        if (fitAddon) {
-                            fitAddon.fit();
-                        }
-                    }, 50);
-                }
+                setTimeout(updateTerminalScale, 100);
             });
         }
         
@@ -770,10 +777,8 @@
                     ptyCols = data.cols;
                     console.log(`PTY size updated: ${ptyCols}x${ptyRows}`);
                     
-                    // If in original mode, resize terminal to match PTY size
-                    if (displayMode === 'original') {
-                        term.resize(ptyCols, ptyRows);
-                    }
+                    // Always resize terminal to match PTY size (fixed dimensions)
+                    term.resize(ptyCols, ptyRows);
                     break;
                 case 'prompt':
                     showPrompt(data.prompt);
@@ -788,17 +793,117 @@
             term.clear();
         }
         
+        function updateTerminalContainerSize() {
+            const terminal = document.getElementById('terminal');
+            const container = document.getElementById('xterm-container');
+            
+            if (term && ptyRows > 0 && ptyCols > 0) {
+                // Get actual character dimensions from xterm.js (most accurate)
+                let cellWidth, cellHeight;
+                
+                if (term._core && term._core._renderService) {
+                    // xterm.js internal API - actual measured character size
+                    const charSizeService = term._core._renderService.dimensions;
+                    cellWidth = charSizeService.actualCellWidth || 9;
+                    cellHeight = charSizeService.actualCellHeight || 20;
+                    console.log(`Using xterm.js measured dimensions: ${cellWidth}x${cellHeight}px`);
+                } else {
+                    // Fallback: measure any character (all same width in monospace)
+                    const testChar = document.createElement('span');
+                    testChar.style.position = 'absolute';
+                    testChar.style.visibility = 'hidden';
+                    testChar.style.fontFamily = '"JetBrains Mono", "Fira Code", "SF Mono", monospace';
+                    testChar.style.fontSize = '13px';
+                    testChar.style.lineHeight = '1.2';
+                    testChar.textContent = 'X'; // Any character works for monospace
+                    document.body.appendChild(testChar);
+                    
+                    const rect = testChar.getBoundingClientRect();
+                    cellWidth = rect.width;   // All chars same width in monospace
+                    cellHeight = rect.height; // Line height
+                    
+                    document.body.removeChild(testChar);
+                    console.log(`Using monospace font measurements: ${cellWidth}x${cellHeight}px`);
+                }
+                
+                const terminalWidth = ptyCols * cellWidth;
+                const terminalHeight = ptyRows * cellHeight;
+                
+                console.log(`Terminal natural size: ${terminalWidth}x${terminalHeight}px (${ptyCols}x${ptyRows} chars)`);
+                
+                if (displayMode === 'original') {
+                    // Original mode: set terminal to natural size, panel will scroll
+                    terminal.style.width = terminalWidth + 'px';
+                    terminal.style.height = terminalHeight + 'px';
+                    terminal.style.minWidth = 'unset';
+                    terminal.style.minHeight = 'unset';
+                    terminal.style.maxWidth = 'unset';
+                    terminal.style.maxHeight = 'unset';
+                } else {
+                    // Fit mode: terminal takes available space, content scales
+                    terminal.style.width = '100%';
+                    terminal.style.height = '100%';
+                    terminal.style.minWidth = '400px';
+                    terminal.style.minHeight = '300px';
+                    terminal.style.maxWidth = 'unset';
+                    terminal.style.maxHeight = 'unset';
+                    
+                    // Calculate scale to fit
+                    updateTerminalScale();
+                }
+            }
+        }
+        
+        function updateTerminalScale() {
+            if (displayMode === 'fit' && term && ptyRows > 0 && ptyCols > 0) {
+                const terminal = document.getElementById('terminal');
+                const container = document.getElementById('xterm-container');
+                
+                // Get available space
+                const terminalRect = terminal.getBoundingClientRect();
+                const availableWidth = terminalRect.width;
+                const availableHeight = terminalRect.height;
+                
+                // Get actual character dimensions (same logic as updateTerminalContainerSize)
+                let cellWidth, cellHeight;
+                
+                if (term._core && term._core._renderService) {
+                    const charSizeService = term._core._renderService.dimensions;
+                    cellWidth = charSizeService.actualCellWidth || 9;
+                    cellHeight = charSizeService.actualCellHeight || 20;
+                } else {
+                    // Fallback to approximate values if xterm internals aren't available
+                    cellWidth = 9;
+                    cellHeight = 20;
+                }
+                
+                const terminalWidth = ptyCols * cellWidth;
+                const terminalHeight = ptyRows * cellHeight;
+                
+                // Calculate scale to fit
+                const scaleX = availableWidth / terminalWidth;
+                const scaleY = availableHeight / terminalHeight;
+                const scale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 100%
+                
+                console.log(`Scaling terminal: ${scale.toFixed(2)}x (available: ${availableWidth}x${availableHeight}, natural: ${terminalWidth}x${terminalHeight})`);
+                
+                container.style.transform = `scale(${scale})`;
+            }
+        }
+        
         function handleGridUpdate(data) {
             try {
-                // Update terminal size if needed
+                // Update terminal size to match server size (always fixed)
                 if (data.size && (data.size.rows !== ptyRows || data.size.cols !== ptyCols)) {
                     ptyRows = data.size.rows;
                     ptyCols = data.size.cols;
-                    console.log(`Grid size updated: ${ptyCols}x${ptyRows}`);
+                    console.log(`Grid size updated to fixed server size: ${ptyCols}x${ptyRows}`);
                     
-                    if (displayMode === 'original') {
-                        term.resize(ptyCols, ptyRows);
-                    }
+                    // Always use the exact server size
+                    term.resize(ptyCols, ptyRows);
+                    
+                    // Update the terminal container size to match
+                    updateTerminalContainerSize();
                 }
                 
                 // Apply cell changes using xterm.js buffer write
@@ -824,6 +929,7 @@
                             if (cell.bold) ansiSequence += '\x1b[1m';
                             if (cell.italic) ansiSequence += '\x1b[3m';
                             if (cell.underline) ansiSequence += '\x1b[4m';
+                            if (cell.reverse) ansiSequence += '\x1b[7m';
                             
                             // Add the character and reset
                             ansiSequence += cell.char + '\x1b[0m';
@@ -837,6 +943,15 @@
                 // Update cursor position
                 if (data.cursor) {
                     term.write(`\x1b[${data.cursor.row + 1};${data.cursor.col + 1}H`);
+                }
+                
+                // Update cursor visibility
+                if (typeof data.cursor_visible === 'boolean') {
+                    if (data.cursor_visible) {
+                        term.write('\x1b[?25h'); // Show cursor
+                    } else {
+                        term.write('\x1b[?25l'); // Hide cursor
+                    }
                 }
                 
             } catch (error) {
@@ -888,12 +1003,7 @@
                 document.getElementById('logsToggle').style.background = '';
             }
             
-            // Resize terminal after panel toggle (only in fit mode)
-            setTimeout(() => {
-                if (displayMode === 'fit' && fitAddon) {
-                    fitAddon.fit();
-                }
-            }, 350);
+            // Terminal size is fixed, no need to resize on panel toggle
         }
         
         function toggleJsonl() {
@@ -916,12 +1026,7 @@
                 document.getElementById('jsonlToggle').style.background = '';
             }
             
-            // Resize terminal after panel toggle (only in fit mode)
-            setTimeout(() => {
-                if (displayMode === 'fit' && fitAddon) {
-                    fitAddon.fit();
-                }
-            }, 350);
+            // Terminal size is fixed, no need to resize on panel toggle
         }
         
         function clearJsonl() {
@@ -1365,40 +1470,27 @@
             }
         }
         
-        let displayMode = 'fit'; // Default to fit mode
+        // Display mode: 'fit' scales to available space, 'original' shows actual size with scroll
+        let displayMode = 'fit';
         
         function toggleDisplayMode() {
             const terminal = document.getElementById('terminal');
-            const displayButton = document.getElementById('displayMode');
+            const btn = document.getElementById('displayModeBtn');
             
             if (displayMode === 'fit') {
-                // Switch to original mode
                 displayMode = 'original';
                 terminal.className = 'terminal mode-original';
-                displayButton.innerHTML = '<span>📏</span>';
-                displayButton.title = 'Switch to fit mode';
-                
-                // In original mode, set terminal to exact PTY dimensions
-                term.resize(ptyCols, ptyRows);
-                
-                // Remove any transform scaling
-                const container = document.getElementById('xterm-container');
-                container.style.transform = 'scale(1)';
-                
+                btn.innerHTML = '<span>📏</span>';
+                btn.title = 'Switch to fit mode';
             } else {
-                // Switch to fit mode
                 displayMode = 'fit';
                 terminal.className = 'terminal mode-fit';
-                displayButton.innerHTML = '<span>🔲</span>';
-                displayButton.title = 'Switch to original mode';
-                
-                // In fit mode, re-enable fitAddon to scale to available space
-                setTimeout(() => {
-                    if (fitAddon) {
-                        fitAddon.fit();
-                    }
-                }, 100);
+                btn.innerHTML = '<span>🔲</span>';
+                btn.title = 'Switch to original size mode';
             }
+            
+            // Update terminal sizing for new mode
+            updateTerminalContainerSize();
         }
         
         function toggleSettings() {

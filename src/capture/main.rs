@@ -1,14 +1,62 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::io::Write;
+use tracing_subscriber::fmt::MakeWriter;
 
+mod analyze;
 mod capture;
 mod replay;
 mod session_data;
+mod test_chunking;
 
+use analyze::analyze_jsonl_data;
 use capture::{CaptureMode, CaptureSession};
 use replay::ReplaySession;
 use session_data::SessionRecording;
+use test_chunking::{test_vt100_chunking_strategies, load_test_data_from_jsonl};
+
+// Error collection writer to prevent VT100 debug messages from interfering with display
+#[derive(Clone)]
+struct ErrorCollectorWriter {
+    errors: Arc<Mutex<Vec<String>>>,
+}
+
+impl ErrorCollectorWriter {
+    fn new() -> Self {
+        Self {
+            errors: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn get_errors(&self) -> Vec<String> {
+        self.errors.lock().unwrap().clone()
+    }
+}
+
+impl Write for ErrorCollectorWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Ok(s) = String::from_utf8(buf.to_vec()) {
+            if let Ok(mut errors) = self.errors.lock() {
+                errors.push(s.trim().to_string());
+            }
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for ErrorCollectorWriter {
+    type Writer = ErrorCollectorWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "codemux-capture")]
@@ -42,9 +90,24 @@ enum Commands {
         /// Start playback at specific timestamp (milliseconds)
         #[arg(short, long, default_value = "0")]
         start: u32,
-        /// Auto-play on start (vs paused)
+            /// Auto-play on start (vs paused)
         #[arg(short, long)]
         auto_play: bool,
+    },
+    /// Analyze JSONL capture data for cursor behavior debugging
+    Analyze {
+        /// Input JSONL file to analyze
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Show detailed VT100 processing steps
+        #[arg(short, long)]
+        verbose: bool,
+    },
+    /// Test VT100 chunking strategies to debug cursor positioning
+    TestChunking {
+        /// Input JSONL file to test different chunking strategies on
+        #[arg(short, long)]
+        input: PathBuf,
     },
 }
 
@@ -52,8 +115,10 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize tracing for debugging
+    // Initialize error collector to prevent VT100 debug messages from interfering
+    let error_collector = ErrorCollectorWriter::new();
     tracing_subscriber::fmt()
+        .with_writer(error_collector.clone())
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
@@ -93,6 +158,15 @@ async fn main() -> Result<()> {
             let recording = SessionRecording::load(&input)?;
             let mut replay = ReplaySession::new(recording, start, auto_play)?;
             replay.start_playback().await?;
+        }
+        Commands::Analyze { input, verbose } => {
+            println!("🔍 Analyzing JSONL capture: {}", input.display());
+            analyze_jsonl_data(&input, verbose).await?;
+        }
+        Commands::TestChunking { input } => {
+            println!("🧪 Testing VT100 chunking strategies: {}", input.display());
+            let raw_data = load_test_data_from_jsonl(input.to_str().unwrap())?;
+            test_vt100_chunking_strategies(&raw_data)?;
         }
     }
 

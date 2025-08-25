@@ -1,8 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
@@ -27,14 +26,16 @@ pub enum SessionEvent {
     },
     /// Grid update from PTY session
     GridUpdate {
-        timestamp: u32, // milliseconds since start
+        timestamp_begin: u32, // milliseconds since start when processing began
+        timestamp_end: u32,   // milliseconds since start when processing completed
         size: (u16, u16),
-        cells: HashMap<(u16, u16), GridCell>,
+        cells: Vec<GridCellWithPos>, // Changed from HashMap to Vec for JSON compatibility
         cursor: (u16, u16),
     },
     /// Raw PTY output for direct capture
     RawPtyOutput {
-        timestamp: u32, // milliseconds since start
+        timestamp_begin: u32, // milliseconds since start when data received
+        timestamp_end: u32,   // milliseconds since start when data processed
         data: Vec<u8>,  // Raw bytes from PTY including ANSI sequences
     },
 }
@@ -48,6 +49,15 @@ pub struct GridCell {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub reverse: bool,
+}
+
+/// Grid cell with position for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GridCellWithPos {
+    pub row: u16,
+    pub col: u16,
+    pub cell: GridCell,
 }
 
 /// Complete session recording with metadata
@@ -107,8 +117,8 @@ impl SessionRecording {
             SessionEvent::Input { timestamp, .. } => *timestamp,
             SessionEvent::Output { timestamp, .. } => *timestamp,
             SessionEvent::Resize { timestamp, .. } => *timestamp,
-            SessionEvent::GridUpdate { timestamp, .. } => *timestamp,
-            SessionEvent::RawPtyOutput { timestamp, .. } => *timestamp,
+            SessionEvent::GridUpdate { timestamp_begin, .. } => *timestamp_begin,
+            SessionEvent::RawPtyOutput { timestamp_begin, .. } => *timestamp_begin,
         }
     }
 
@@ -173,5 +183,54 @@ impl SessionRecording {
             .map(|e| self.get_event_timestamp(e))
             .filter(|&ts| ts < current.saturating_sub(100)) // At least 100ms difference
             .last()
+    }
+}
+
+/// JSONL streaming writer for real-time event recording
+pub struct JsonlRecorder {
+    writer: BufWriter<File>,
+    metadata: SessionMetadata,
+    start_time: SystemTime,
+}
+
+impl JsonlRecorder {
+    /// Create a new JSONL recorder
+    pub fn new<P: AsRef<Path>>(path: P, agent: String, args: Vec<String>) -> Result<Self> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        
+        let metadata = SessionMetadata {
+            agent,
+            args,
+            start_time: SystemTime::now(),
+            duration: Duration::ZERO,
+            total_events: 0,
+            version: "1.0".to_string(),
+        };
+        
+        // Write metadata as first line
+        let metadata_json = serde_json::to_string(&metadata)?;
+        writeln!(writer, "{}", metadata_json)?;
+        writer.flush()?;
+        
+        Ok(Self {
+            writer,
+            metadata,
+            start_time: SystemTime::now(),
+        })
+    }
+    
+    /// Write an event to the JSONL file
+    pub fn write_event(&mut self, event: &SessionEvent) -> Result<()> {
+        let event_json = serde_json::to_string(event)?;
+        writeln!(self.writer, "{}", event_json)?;
+        self.writer.flush()?;
+        Ok(())
+    }
+    
+    /// Finalize the recording
+    pub fn finalize(mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
     }
 }
