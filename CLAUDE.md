@@ -25,6 +25,10 @@ cargo build --release  # For production builds
 ```bash
 cargo run                    # Normal run mode
 cargo run -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
+
+# Capture system (separate binary)
+cargo run --bin codemux-capture -- --agent claude --output session.jsonl
+cargo run --bin codemux-capture -- --analyze session.jsonl --verbose
 ```
 
 ### Test
@@ -36,7 +40,7 @@ cargo test -- --nocapture  # To see println! output during tests
 ### Format and Lint
 ```bash
 cargo fmt        # Format code
-cargo clippy     # Lint code
+cargo clippy     # Lint code (with clippy improvements applied)
 ```
 
 ## Architecture Components
@@ -66,14 +70,18 @@ cargo clippy     # Lint code
    - **PTY Control**: Both clients can send control messages (resize, etc.) via control channel
 
 5. **Web Interface**:
-   - Grid-based terminal emulation using VT100 parser state from TUI
+   - Grid-based terminal emulation using VT100 parser state from PTY session
+   - Fixed-size terminal with scaling modes:
+     - **Fit mode**: Scale terminal to fit available space with proper centering
+     - **Original mode**: Show terminal at actual size with scrollbars
    - Native HTML components for interactive prompts:
-     - Text inputs with proper validation
+     - Text inputs with proper Enter key handling (preventDefault)
      - Multi-select checkboxes/dropdowns
      - File pickers for path inputs
      - Confirmation dialogs
    - Project/session management UI
-   - Real-time synchronization with TUI terminal state
+   - Real-time terminal updates via WebSocket grid messages
+   - JSONL session streaming for debugging and analysis
 
 6. **Session Management**:
    - Multiple concurrent AI sessions
@@ -102,10 +110,12 @@ When implementing features, consider using:
 - **Mode Consistency**: Same architecture for run mode (local channels) and daemon mode (WebSocket channels).
 
 ### Input/Output Handling  
-- **TUI Input**: Sends complete input stream (raw keystrokes, escape sequences, control characters) directly to PTY
-- **Web UI Input**: Translates web form interactions (text inputs, selects, buttons) into corresponding terminal input sequences
+- **TUI Input**: Sends individual keystrokes including `\r` for Enter key directly to PTY
+- **Web UI Input**: Sends message text and `\r` separately to mimic terminal behavior (text content + submission signal)
+- **Input Processing**: AI agents expect text content and carriage return (`\r`) as separate events for proper input processing
 - **Output Distribution**: PTY session broadcasts output to all connected clients via channels
-- **Grid Synchronization**: Web UI receives grid updates from TUI's VT100 parser state, not raw PTY output
+- **Grid Synchronization**: Web UI receives grid updates from PTY's VT100 parser state with proper cursor visibility tracking
+- **Cursor Handling**: Real cursor is often hidden by Claude (`\x1b[?25l`), fake cursor created with reverse video styling (`\x1b[7m \x1b[27m`)
 
 ### Technical Details
 - **Prompt Detection**: Parse ANSI escape codes and common prompt patterns from AI CLIs
@@ -113,7 +123,28 @@ When implementing features, consider using:
 - **Security**: Validate all commands against whitelist before execution
 - **State Management**: In daemon mode, persist project list and session state to SQLite
 - **PTY Sizing**: Both TUI and Web UI can control PTY size. PTY session arbitrates resize requests (last-writer-wins).
-  - **TODO**: Size consensus mechanism needed. Currently both clients can keep changing size and see their size not met, leading to resize conflicts. Need to implement consensus algorithm (priority-based, negotiation, or coordinator pattern) to handle multiple clients requesting different sizes simultaneously.
+  - **Web UI Scaling**: Implements proper scaling with `translate()` + `scale()` transforms, dimension validation, and centering
+  - **Resize Handling**: Clear transforms during resize operations to prevent conflicts, use proper timing with requestAnimationFrame
 - **Process Management**: Properly handle SIGTERM/SIGINT for graceful shutdown
 - **Debug Logging**: In debug mode (`--debug` flag), all tracing output is written to `/tmp/codemux-debug.log` to avoid interfering with TUI display. In normal mode, only ERROR level messages are logged and discarded.
 - **Output to Terminal**: Use `eprintln!` instead of `println!` to avoid interfering with the TUI display. The TUI uses stdout for rendering, so any `println!` calls will corrupt the display. Use `eprintln!` for debugging or error messages that need to go to stderr.
+
+### Grid Cell Structure
+The `GridCell` struct represents terminal content with full styling support:
+```rust
+pub struct GridCell {
+    pub char: String,           // Character content
+    pub fg_color: Option<String>, // Foreground color (hex)
+    pub bg_color: Option<String>, // Background color (hex)
+    pub bold: bool,             // Bold text
+    pub italic: bool,           // Italic text
+    pub underline: bool,        // Underlined text
+    pub reverse: bool,          // Reverse video (for fake cursors)
+}
+```
+
+### Capture and Analysis System
+- **JSONL Recording**: Real-time session capture to JSON Lines format for debugging and analysis
+- **VT100 Processing**: Compare different chunking strategies (immediate vs batched) to debug cursor positioning
+- **Event Types**: Support for `RawPtyOutput`, `GridUpdate`, `Input`, and `Resize` events with precise timestamps
+- **Analysis Tools**: Built-in tools to analyze cursor movement patterns, timing, and VT100 sequence processing
