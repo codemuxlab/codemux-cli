@@ -78,7 +78,6 @@ codemux/
 │   │   ├── components/ # React components
 │   │   └── stores/     # Zustand state management
 │   └── package.json
-├── static/             # Static web assets
 ├── build.rs           # Rust build script
 └── justfile           # Development commands
 ```
