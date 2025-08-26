@@ -1,6 +1,6 @@
 [package]
 name = "codemux"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 description = "Terminal multiplexer for AI coding CLIs with enhanced web UI support"
 homepage = "https://www.codemux.dev"
@@ -10,9 +10,9 @@ repository = "https://github.com/codemuxlab/codemux-cli"
 name = "codemux"
 path = "src/main.rs"
 
-[[bin]]
-name = "codemux-capture"
-path = "src/capture/main.rs"
+# [[bin]]
+# name = "codemux-capture"
+# path = "src/capture/main.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
