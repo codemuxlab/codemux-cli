@@ -752,6 +752,11 @@ impl PtySession {
             args: self.args.clone(),
         }
     }
+
+    /// Get the agent name
+    pub fn agent(&self) -> &str {
+        &self.agent
+    }
 }
 
 impl PtySession {

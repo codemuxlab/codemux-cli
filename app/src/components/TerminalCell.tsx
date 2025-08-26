@@ -39,21 +39,23 @@ export const TerminalCell = memo(({ row, col }: TerminalCellProps) => {
     return cell?.bg_color || (char === ' ' ? '#111111' : 'transparent');
   };
   
-  const style = {
+  // Build dynamic classes for styles that change
+  const dynamicClasses = [
+    cell?.bold && 'font-bold',
+    cell?.italic && 'italic',
+    cell?.underline && 'underline'
+  ].filter(Boolean).join(' ');
+
+  const dynamicStyle = {
     color: getForegroundColor(),
     backgroundColor: getBackgroundColor(),
-    fontWeight: cell?.bold ? 'bold' as const : 'normal' as const,
-    fontStyle: cell?.italic ? 'italic' as const : 'normal' as const,
-    textDecorationLine: cell?.underline ? 'underline' as const : 'none' as const,
-    fontFamily: 'monospace',
-    fontSize: 14,
-    lineHeight: 20,
-    minWidth: 9,
-    textAlign: 'center' as const,
   };
   
   return (
-    <Text style={style}>
+    <Text 
+      className={`font-mono text-sm leading-5 text-center min-w-[9px] ${dynamicClasses}`}
+      style={dynamicStyle}
+    >
       {char}
     </Text>
   );

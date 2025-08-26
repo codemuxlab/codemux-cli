@@ -18,7 +18,7 @@ const TerminalRow = memo(({ row, cols }: { row: number; cols: number }) => {
   }
   
   return (
-    <View style={{ flexDirection: 'row' }}>
+    <View className="flex-row">
       {cells}
     </View>
   );
@@ -42,7 +42,7 @@ const TerminalGrid = memo(() => {
   }
   
   return (
-    <View style={{ backgroundColor: '#0d1117' }}>
+    <View>
       {rows}
     </View>
   );
@@ -190,15 +190,23 @@ export default function Terminal({ sessionId }: TerminalProps) {
         </Text>
       </View>
 
-      {/* Terminal grid */}
-      <ScrollView
-        ref={scrollViewRef}
-        className="flex-1"
-        contentContainerStyle={{ padding: 8 }}
-        showsVerticalScrollIndicator={false}
-      >
-        <TerminalGrid />
-      </ScrollView>
+      {/* Terminal grid container - constrain ScrollView size */}
+      <View className="flex-1 w-full bg-gray-900">
+        <ScrollView
+          ref={scrollViewRef}
+          className="w-full"
+          showsVerticalScrollIndicator={true}
+          showsHorizontalScrollIndicator={true}
+          contentContainerStyle={{
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 16,
+            minHeight: '100%'
+          }}
+        >
+          <TerminalGrid />
+        </ScrollView>
+      </View>
 
       {/* Input area */}
       <TerminalInput onSubmit={handleInputSubmit} />

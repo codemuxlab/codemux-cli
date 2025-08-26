@@ -29,7 +29,7 @@ export default function Page() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
+    <View className="flex-1 w-full">
       <Terminal sessionId={sessionId} />
     </View>
   );
