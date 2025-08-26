@@ -3,6 +3,7 @@
     "crossterm",
     "ratatui",
     "logfile",
-    "codemux"
+    "codemux",
+    "codemuxlab"
   ]
 }
