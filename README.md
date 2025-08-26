@@ -15,17 +15,22 @@ A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, et
 
 ## Quick Start
 
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (latest stable)
-- [Node.js](https://nodejs.org/) 18+ (for web UI)
-- [just](https://github.com/casey/just) command runner (optional but recommended)
-
 ### Installation
+
+#### Homebrew (Recommended)
+
+```bash
+# Install from our Homebrew tap
+brew install codemuxlab/tap/codemux
+```
+
+#### From Source
+
+For development or if you prefer building from source:
 
 ```bash
 # Clone the repository
-git clone https://github.com/anthropics/codemux
+git clone https://github.com/codemuxlab/codemux-cli
 cd codemux
 
 # Setup development environment (installs all dependencies)
@@ -36,39 +41,45 @@ cargo build --release
 cd app && npm install
 ```
 
+> **Prerequisites for building from source**: [Rust](https://rustup.rs/) (latest stable), [Node.js](https://nodejs.org/) 18+, and optionally [just](https://github.com/casey/just) command runner.
+
 ## Usage
 
 ### Quick Mode - Run a single session
 
 ```bash
-# Using just (recommended)
-just run-dev              # Build and run with development settings
-just run-debug            # Run with debug logging enabled
+# Start a Claude session
+codemux run claude
 
-# Or directly with cargo
-cargo run -- run claude   # Start a claude session
-cargo run -- run claude --debug  # With debug logging
+# Session continuity options
+codemux run claude --continue           # Continue most recent session
+codemux run claude --resume <session>   # Resume specific session
+
+# Additional options
+codemux run claude --open               # Auto-open web interface
+codemux run claude --port 3000          # Use custom port
+codemux run claude --debug              # Enable debug logging
 ```
 
 ### Daemon Mode - Manage multiple projects
 
 ```bash
 # Start the daemon
-just daemon
-# Or: cargo run -- daemon
+codemux daemon
 
 # Add a project  
-just add-project /path/to/project
-# Or: cargo run -- add-project /path/to/project
+codemux add-project /path/to/project
 
 # List projects and sessions
-just list
-# Or: cargo run -- list
+codemux list
+
+# Stop the daemon
+codemux stop
 ```
 
 ## Web Interface
 
-Once a session is started, open `http://localhost:8080` in your browser to access:
+Once a session is started, open `http://localhost:8765` in your browser to access (or use `--open` to open automatically):
 
 - **High-Performance Terminal**: Grid-based rendering with independent cell updates
 - **Native UI Components** for interactive prompts:
@@ -81,81 +92,24 @@ Once a session is started, open `http://localhost:8080` in your browser to acces
 - **Project Organization**: Group sessions by development projects
 - **Debug Tools**: JSONL session capture and analysis
 
-### Architecture
-
-The web interface uses:
-- **React Native Web** with NativeWind (Tailwind CSS)
-- **Zustand** for state management with granular subscriptions  
-- **WebSocket** communication with optimized grid updates
-- **VT100 Terminal Emulation** with proper ANSI escape sequence handling
-
 ## Supported Code Agents
 
-By default, the following code agents are whitelisted:
-- claude (Claude Code CLI)
+### Currently Supported
+- **claude** (Claude Code CLI) - Full support with session continuity
+
+### Coming Soon
 - gemini (Google Gemini CLI)  
 - aider (AI pair programming)
 - cursor (Cursor CLI)
 - continue (Continue dev CLI)
 
+> **Note**: While the codebase includes configurations for multiple agents, only Claude is fully supported and tested at this time. Other agents are available in the whitelist but may have limited functionality.
+
 Add more agents by editing the config file at `~/.config/codemux/config.toml`.
 
 ## Development
 
-### Using Just (Recommended)
-
-```bash
-just                      # Show all available commands
-just setup               # Setup development environment
-just dev                 # Fast development build (skips React app)
-just build               # Production build (includes React app)
-just app-dev             # Start React Native Web dev server
-just watch               # Watch mode for continuous development
-just test                # Run all tests
-just fmt                 # Format code
-just clippy              # Run linter
-just ci                  # Full CI pipeline
-```
-
-### Manual Commands
-
-```bash
-# Development builds (fast)
-cargo build
-cargo run
-
-# Production builds (includes React Native Web build)
-CODEMUX_BUILD_APP=1 cargo build
-cargo build --release
-
-# React Native Web development
-cd app && npm start      # Development server
-cd app && npm run build  # Build for production
-
-# Testing and quality
-cargo test
-cargo fmt
-cargo clippy
-```
-
-### Project Structure
-
-```
-codemux/
-├── src/                 # Rust backend source
-│   ├── main.rs         # CLI entry point
-│   ├── web.rs          # WebSocket server
-│   ├── pty_session.rs  # PTY management
-│   └── ...
-├── app/                # React Native Web frontend
-│   ├── src/
-│   │   ├── components/ # React components
-│   │   └── stores/     # Zustand state management
-│   └── package.json
-├── static/             # Static web assets
-├── build.rs           # Rust build script
-└── justfile           # Development commands
-```
+For development setup, building, and contributing, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 ## License
 
