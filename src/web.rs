@@ -1,9 +1,11 @@
 use anyhow::Result;
 use axum::{
+    body::Body,
     extract::{ws::WebSocketUpgrade, Path, State},
+    http::{header, StatusCode},
     response::{
         sse::{Event, Sse},
-        Html, IntoResponse,
+        IntoResponse, Response,
     },
     routing::get,
     Json, Router,
@@ -15,6 +17,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 
+use crate::embedded_assets::ReactAssets;
 use crate::pty_session::PtyInputMessage;
 use crate::session::{ProjectInfo, SessionInfo, SessionManager};
 
@@ -48,6 +51,8 @@ pub async fn start_web_server(
         .route("/api/sessions/:id/stream", get(stream_session_jsonl))
         .route("/api/projects", get(list_projects))
         .route("/api/projects", axum::routing::post(add_project))
+        .route("/_expo/static/*path", get(static_handler))
+        .route("/*path", get(react_spa_handler))
         .layer(ServiceBuilder::new())
         .with_state(state);
 
@@ -87,6 +92,8 @@ pub async fn start_web_server_run_mode(
         .route("/", get(run_mode_session))
         .route("/ws/:session_id", get(websocket_handler))
         .route("/api/sessions/:id/stream", get(stream_session_jsonl))
+        .route("/_expo/static/*path", get(static_handler))
+        .route("/*path", get(react_spa_handler))
         .layer(ServiceBuilder::new())
         .with_state(state.clone());
 
@@ -97,26 +104,17 @@ pub async fn start_web_server_run_mode(
     Ok(())
 }
 
-async fn daemon_index() -> Html<&'static str> {
-    Html(include_str!("../static/index.html"))
+async fn daemon_index() -> impl IntoResponse {
+    serve_react_asset("index.html").await
 }
 
-async fn run_mode_session() -> Html<&'static str> {
-    Html(include_str!("../static/session.html"))
+async fn run_mode_session() -> impl IntoResponse {
+    serve_react_asset("index.html").await
 }
 
-async fn session_page(State(_state): State<AppState>) -> Html<String> {
-    // For daemon mode, include back button
-    let html = include_str!("../static/session.html");
-    let with_back_button = html.replace(
-        "<!-- DAEMON_MODE_NAV -->",
-        r#"
-        <a href="/" class="back-btn">
-            <span>← Back to Sessions</span>
-        </a>
-    "#,
-    );
-    Html(with_back_button)
+async fn session_page(State(_state): State<AppState>) -> impl IntoResponse {
+    // For daemon mode, serve React app
+    serve_react_asset("index.html").await
 }
 
 async fn websocket_handler(
@@ -210,6 +208,12 @@ async fn handle_socket(
                     cursor_visible,
                     timestamp,
                 } => {
+                    let cells = cells
+                        .into_iter()
+                        .filter(|(_, cell)| !cell.is_empty_space())
+                        .map(|((row, col), cell)| serde_json::json!([row, col, cell]))
+                        .collect::<Vec<_>>();
+                    tracing::debug!("Request keyframe: {}", cells.len());
                     serde_json::json!({
                         "type": "grid_update",
                         "update_type": "keyframe",
@@ -217,9 +221,7 @@ async fn handle_socket(
                             "rows": size.rows,
                             "cols": size.cols
                         },
-                        "cells": cells.into_iter().map(|((row, col), cell)| {
-                            serde_json::json!([row, col, cell])
-                        }).collect::<Vec<_>>(),
+                        "cells": cells,
                         "cursor": {
                             "row": cursor.0,
                             "col": cursor.1
@@ -267,9 +269,11 @@ async fn handle_socket(
                                         "rows": size.rows,
                                         "cols": size.cols
                                     },
-                                    "cells": cells.into_iter().map(|((row, col), cell)| {
-                                        serde_json::json!([row, col, cell])
-                                    }).collect::<Vec<_>>(),
+                                    "cells": cells.into_iter()
+                                        .filter(|(_, cell)| !cell.is_empty_space())
+                                        .map(|((row, col), cell)| {
+                                            serde_json::json!([row, col, cell])
+                                        }).collect::<Vec<_>>(),
                                     "cursor": {
                                         "row": cursor.0,
                                         "col": cursor.1
@@ -609,4 +613,42 @@ async fn add_project(
         Ok(info) => Ok(Json(info)),
         Err(e) => Err(e.to_string()),
     }
+}
+
+async fn serve_react_asset(path: &str) -> impl IntoResponse {
+    tracing::debug!("serve_react_asset called with path: '{}'", path);
+    match ReactAssets::get(path) {
+        Some(content) => {
+            let body = Body::from(content.data.into_owned());
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            tracing::debug!("Found asset '{}', serving with mime: {}", path, mime);
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime.as_ref())
+                .body(body)
+                .unwrap()
+        }
+        None => {
+            tracing::debug!("Asset '{}' not found, returning 404", path);
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Not found"))
+                .unwrap()
+        }
+    }
+}
+
+async fn static_handler(Path(path): Path<String>) -> impl IntoResponse {
+    let file_path = format!("_expo/static/{}", path);
+    tracing::debug!(
+        "Static handler requested path: '{}', serving file: '{}'",
+        path,
+        file_path
+    );
+    serve_react_asset(&file_path).await
+}
+
+async fn react_spa_handler(Path(_path): Path<String>) -> impl IntoResponse {
+    // For SPA routing, always serve index.html for non-API routes
+    serve_react_asset("index.html").await
 }

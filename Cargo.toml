@@ -38,3 +38,5 @@ open = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 tui-term = "0.1.11"
 vt100 = "0.15"
+rust-embed = { version = "8.5", features = ["debug-embed"] }
+mime_guess = "2.0"

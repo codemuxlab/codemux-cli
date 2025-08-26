@@ -1,4 +1,5 @@
 mod config;
+mod embedded_assets;
 mod prompt_detector;
 mod pty;
 mod pty_session;

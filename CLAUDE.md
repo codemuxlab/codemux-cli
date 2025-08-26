@@ -15,33 +15,52 @@ Operating modes:
 
 ## Development Commands
 
-### Build
+### Rust Backend
 ```bash
-cargo build
-cargo build --release  # For production builds
-```
+cargo build                   # Development build (skips React app build)
+cargo build --release        # Production build (includes React app build)
+CODEMUX_BUILD_APP=1 cargo build  # Force React app build in development
 
-### Run
-```bash
 cargo run                    # Normal run mode
 cargo run -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
 
 # Capture system (separate binary)
 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
 cargo run --bin codemux-capture -- --analyze session.jsonl --verbose
-```
 
-### Test
-```bash
 cargo test
 cargo test -- --nocapture  # To see println! output during tests
-```
-
-### Format and Lint
-```bash
 cargo fmt        # Format code
 cargo clippy     # Lint code (with clippy improvements applied)
 ```
+
+### React Native App (Expo)
+```bash
+cd app
+npm install              # Install dependencies
+npx expo start          # Start development server
+npx expo start --web    # Start web development server
+npx expo export         # Export for production
+```
+
+### Just Commands (Recommended)
+```bash
+just                     # Show all available commands
+just setup              # Setup development environment
+just dev                # Development build (fast)
+just build              # Production build (includes React app)
+just release            # Optimized release build
+just run-dev            # Build and run in development mode
+just run-debug          # Run with debug logging
+just app-dev            # Start React app dev server
+just watch              # Watch mode for development
+just ci                 # Full CI pipeline (fmt, clippy, test, build)
+```
+
+**Note**: The React Native app uses:
+- **NativeWind** for Tailwind CSS styling in React Native
+- **Zustand** for state management
+- **Expo** for cross-platform development
 
 ## Architecture Components
 

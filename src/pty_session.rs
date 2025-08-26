@@ -54,12 +54,36 @@ impl From<PtySize> for SerializablePtySize {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GridCell {
     pub char: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fg_color: Option<String>, // hex color like "#ffffff"
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub bg_color: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
     pub bold: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub italic: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub underline: bool,
+    #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
+}
+
+impl GridCell {
+    /// Check if this cell is just an empty space with no styling
+    pub fn is_empty_space(&self) -> bool {
+        self.char == " "
+            && self.fg_color.is_none()
+            && self.bg_color.is_none()
+            && !self.bold
+            && !self.italic
+            && !self.underline
+            && !self.reverse
+    }
+}
+
+// Helper function for serde skip_serializing_if
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 /// Terminal grid update messages
