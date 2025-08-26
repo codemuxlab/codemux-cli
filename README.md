@@ -1,6 +1,6 @@
 # CodeMux
 
-A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with enhanced web UI support. Unlike generic terminal multiplexers, CodeMux only runs whitelisted AI code agents and provides rich web interfaces for CLI interactions.
+A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with enhanced web UI support. Unlike generic terminal multiplexers, CodeMux is optimized for AI code agents and provides rich web interfaces for CLI interactions.
 
 ## Features
 
@@ -9,7 +9,6 @@ A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, et
 - **Smart Prompt Detection**: Intercepts interactive prompts and provides native web UI components
 - **Independent Cell Rendering**: Optimized terminal rendering with granular updates
 - **Project Management**: Organize sessions by project with daemon mode
-- **Security-First**: Only runs approved AI code agents from whitelist
 - **Session Persistence**: Maintain sessions across reconnections
 - **Real-time Updates**: WebSocket-based communication with optimized payloads
 
