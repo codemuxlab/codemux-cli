@@ -43,6 +43,13 @@ fn main() {
     println!("cargo:rerun-if-changed=app/tsconfig.json");
     println!("cargo:rerun-if-changed=app/tailwind.config.js");
 
+    // Check if web assets already exist (from CI artifact)
+    if Path::new("app/dist").exists() {
+        println!("cargo:warning=Using pre-built React Native Web assets from artifact");
+        println!("cargo:rustc-env=REACT_APP_DIR=app/dist");
+        return;
+    }
+
     // Only build the React app in release mode or when explicitly requested
     let should_build_app = env::var("CARGO_FEATURE_BUILD_APP").is_ok()
         || env::var("PROFILE").unwrap_or_default() == "release"

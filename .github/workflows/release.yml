@@ -87,12 +87,17 @@ jobs:
           name: artifacts-plan-dist-manifest
           path: plan-dist-manifest.json
 
+  custom-build-web-assets:
+    uses: ./.github/workflows/build-web-assets.yml
+    secrets: inherit
+
   # Build and packages all the platform-specific things
   build-local-artifacts:
     name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
     # Let the initial task tell us to not run (currently very blunt)
     needs:
       - plan
+      - custom-build-web-assets
     if: ${{ fromJson(needs.plan.outputs.val).ci.github.artifacts_matrix.include != null && (needs.plan.outputs.publishing == 'true' || fromJson(needs.plan.outputs.val).ci.github.pr_run_mode == 'upload') }}
     strategy:
       fail-fast: false
@@ -127,12 +132,11 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
-      - name: "Setup Node.js"
-        uses: "actions/setup-node@v4"
+      - name: "Download web assets"
+        uses: "actions/download-artifact@v4"
         with:
-          "cache": "npm"
-          "cache-dependency-path": "app/package-lock.json"
-          "node-version": "18"
+          "name": "web-assets"
+          "path": "app/dist/"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

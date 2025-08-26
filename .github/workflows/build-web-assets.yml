@@ -1,0 +1,35 @@
+name: Build Web Assets
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  build-web-assets:
+    name: build-web-assets
+    runs-on: "ubuntu-22.04"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: "Setup Node.js"
+        uses: "actions/setup-node@v4"
+        with:
+          "cache": "npm"
+          "cache-dependency-path": "app/package-lock.json"
+          "node-version": "18"
+      - name: Install web dependencies
+        run: |
+          cd app && npm install
+      - name: Build web assets
+        run: |
+          cd app && npm run build
+      - name: "Upload web assets"
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-assets
+          path: app/dist/

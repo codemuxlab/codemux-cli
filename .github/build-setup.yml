@@ -1,6 +1,5 @@
-- name: Setup Node.js
-  uses: actions/setup-node@v4
+- name: Download web assets
+  uses: actions/download-artifact@v4
   with:
-    node-version: '18'
-    cache: 'npm'
-    cache-dependency-path: 'app/package-lock.json'
+    name: web-assets
+    path: app/dist/
