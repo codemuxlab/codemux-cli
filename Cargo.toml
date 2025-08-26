@@ -2,6 +2,9 @@
 name = "codemux"
 version = "0.1.0"
 edition = "2021"
+description = "Terminal multiplexer for AI coding CLIs with enhanced web UI support"
+homepage = "https://www.codemux.dev"
+repository = "https://github.com/codemuxlab/codemux-cli"
 
 [[bin]]
 name = "codemux"
@@ -40,3 +43,8 @@ tui-term = "0.1.11"
 vt100 = "0.15"
 rust-embed = { version = "8.5", features = ["debug-embed"] }
 mime_guess = "2.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
