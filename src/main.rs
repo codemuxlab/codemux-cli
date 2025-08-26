@@ -452,8 +452,8 @@ async fn run_quick_session(
             .display()
             .to_string(),
         url: format!(
-            "http://localhost:{}/?session={}&agent={}",
-            port, session_id, agent
+            "http://localhost:{}/session/{}",
+            port, session_id
         ),
     };
 

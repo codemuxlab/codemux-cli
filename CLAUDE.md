@@ -260,23 +260,55 @@ We use semantic versioning with the following convention:
 - **v0.x.x**: Beta versions with major features but may have breaking changes
 - **v1.x.x**: Stable releases with backwards compatibility guarantees
 
-### Automated Releases
+### Automated Releases with cargo-dist
 
-Releases are automated via cargo-dist:
+Releases are fully automated using [cargo-dist](https://axodotdev.github.io/cargo-dist/):
 
-1. Create a version tag: `git tag v0.0.2` (or appropriate version)
-2. Push the tag: `git push origin v0.0.2`
-3. GitHub Actions will automatically build and publish to:
-   - GitHub Releases (with multi-platform binaries)
-   - Homebrew tap (`codemuxlab/homebrew-tap`)
+#### Release Process
 
-### Manual Release Steps
+1. Update version in `Cargo.toml`: `version = "0.0.5"`
+2. Commit changes: `git commit -m "Bump version to 0.0.5"`
+3. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
+4. GitHub Actions automatically:
+   - Builds binaries for all platforms (macOS, Linux ARM64/x64)
+   - Creates GitHub Release with artifacts
+   - Publishes to Homebrew tap (`codemuxlab/homebrew-tap`)
 
-1. Update version in `Cargo.toml` to match the intended tag version (e.g., `version = "0.0.2"` for tag `v0.0.2`)
-2. Ensure `CLAUDE.md` and documentation are up to date
-3. Run full CI pipeline: `just ci`
-4. Create and push version tag as shown above
+#### cargo-dist Configuration
+
+The release system is configured via `dist-workspace.toml`:
+
+- **Platforms**: macOS (Intel/ARM), Linux (ARM64/x64) - Windows temporarily disabled
+- **Installers**: Homebrew formula generation
+- **Dependencies**: Node.js/npm automatically installed via `github-build-setup`
+- **Build Setup**: Custom steps in `.github/build-setup.yml` for React app building
+
+#### cargo-dist Commands
+
+```bash
+# Regenerate CI workflows after config changes
+dist generate
+
+# Plan a release (what would happen)
+dist plan
+
+# Check current configuration
+dist --help
+```
 
 **Important**: The version in `Cargo.toml` must match the git tag version (without the `v` prefix). For example:
-- `Cargo.toml`: `version = "0.0.2"`
-- Git tag: `v0.0.2`
+- `Cargo.toml`: `version = "0.0.5"`
+- Git tag: `v0.0.5`
+
+#### Build Dependencies
+
+- **React App**: Automatically built during Rust compilation via `build.rs`
+- **Node.js**: Installed in CI via `github-build-setup` configuration
+- **Cross-compilation**: Native builds on respective platforms (no cross-compilation)
+
+#### Troubleshooting
+
+- If builds fail, check GitHub Actions logs for the specific platform
+- Node.js issues: Verify `.github/build-setup.yml` and `dist-workspace.toml` configuration
+- Missing binaries: Ensure all targets in `dist-workspace.toml` are supported
+- Homebrew issues: Check `codemuxlab/homebrew-tap` repository for formula updates
