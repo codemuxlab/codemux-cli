@@ -45,6 +45,7 @@ just app-install         # Install React app dependencies
 just watch               # Watch mode for development iteration
 just watch-test          # Watch mode for tests
 just ci                  # Full CI pipeline (fmt, clippy, test, build)
+just lint-all            # Lint both Rust (clippy) and React app (biome)
 
 # Maintenance
 just fmt                 # Format code
@@ -81,6 +82,8 @@ cargo clippy                             # Lint code
 ```bash
 cd app
 npm install              # Install dependencies
+npm run lint             # Run Biome linter (REQUIRED before commits)
+npm run lint:fix         # Auto-fix linting issues where possible
 npx expo start          # Start development server
 npx expo start --web    # Start web development server
 npx expo export         # Export for production
@@ -90,6 +93,14 @@ npx expo export         # Export for production
 - **NativeWind** for Tailwind CSS styling in React Native
 - **Zustand** for state management
 - **Expo** for cross-platform development
+- **Biome** for linting and code formatting
+- **TanStack Query** for API state management and caching
+
+**Linting Requirements**:
+- ALWAYS run `npm run lint` inside the app directory before committing
+- Fix all linting errors and warnings before submitting changes
+- Biome is configured for strict TypeScript and React best practices
+- Some unsafe fixes require manual review (run with `--unsafe` flag only if needed)
 
 ## Architecture Components
 
@@ -177,6 +188,20 @@ When implementing features, consider using:
 - **Debug Logging**: In debug mode (`--debug` flag), all tracing output is written to `/tmp/codemux-debug.log` to avoid interfering with TUI display. In normal mode, only ERROR level messages are logged and discarded.
 - **Output to Terminal**: Use `eprintln!` instead of `println!` to avoid interfering with the TUI display. The TUI uses stdout for rendering, so any `println!` calls will corrupt the display. Use `eprintln!` for debugging or error messages that need to go to stderr.
 
+### Quality Assurance
+- **Pre-commit Requirements**:
+  1. **Rust**: Run `cargo clippy` and fix all warnings
+  2. **React App**: Run `cd app && npm run lint` and fix all errors/warnings
+  3. **Formatting**: Run `cargo fmt` for Rust code
+  4. **Tests**: Ensure `cargo test` passes
+- **Biome Configuration**: The app uses strict linting rules including:
+  - No unused imports or variables
+  - Proper TypeScript typing (avoid `any`)
+  - React best practices (exhaustive dependencies, key props)
+  - Modern JavaScript patterns (optional chaining, proper radix for parseInt)
+- **Type Safety**: All API endpoints must have corresponding TypeScript interfaces
+- **Error Handling**: Proper error boundaries and user feedback for API failures
+
 ### Grid Cell Structure
 The `GridCell` struct represents terminal content with full styling support:
 ```rust
@@ -196,3 +221,20 @@ pub struct GridCell {
 - **VT100 Processing**: Compare different chunking strategies (immediate vs batched) to debug cursor positioning
 - **Event Types**: Support for `RawPtyOutput`, `GridUpdate`, `Input`, and `Resize` events with precise timestamps
 - **Analysis Tools**: Built-in tools to analyze cursor movement patterns, timing, and VT100 sequence processing
+
+### API and Web Interface
+- **Axum Web Server**: REST API endpoints with CORS support for cross-origin requests
+- **API Structure**: Projects contain sessions (restructured from separate endpoints)
+- **Git Integration**: Real-time git status, diff viewing, and file change tracking
+- **WebSocket Connections**: Real-time terminal communication via WebSocket
+- **Type Safety**: Full TypeScript interfaces for all API responses
+- **State Management**: TanStack Query for intelligent caching and background updates
+
+### Current Features
+- **Session Management**: Create, list, and manage AI coding sessions
+- **Project Organization**: Group sessions by project directory
+- **Git Diff Viewer**: GitHub-style diff display with syntax highlighting
+- **Real-time Updates**: Auto-refreshing git status and diff content
+- **Terminal Interface**: Full terminal emulation with scaling and proper cursor handling
+- **Cross-platform**: Works on web browsers via React Native Web
+- **Debug Capture**: Session recording and analysis for troubleshooting

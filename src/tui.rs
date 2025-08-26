@@ -123,7 +123,7 @@ impl SessionTui {
             terminal_grid: std::collections::HashMap::new(),
             terminal_cursor: (0, 0),
             terminal_cursor_visible: true, // Default to visible
-            terminal_size: (30, 120),      // Default size
+            terminal_size: (crate::pty_session::DEFAULT_PTY_ROWS, crate::pty_session::DEFAULT_PTY_COLS),
             pty_channels,
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),
@@ -150,11 +150,11 @@ impl SessionTui {
                 let width = std::env::var("COLUMNS")
                     .ok()
                     .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(120);
+                    .unwrap_or(crate::pty_session::DEFAULT_PTY_COLS);
                 let height = std::env::var("LINES")
                     .ok()
                     .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(30);
+                    .unwrap_or(crate::pty_session::DEFAULT_PTY_ROWS);
 
                 tracing::warn!(
                     "Could not detect terminal size: {}. Using fallback size {}x{}",

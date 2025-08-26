@@ -37,7 +37,7 @@ fn main() {
         println!("cargo:warning=Installing React Native Web dependencies...");
 
         let npm_install = Command::new("npm")
-            .args(&["install"])
+            .args(["install"])
             .current_dir("app")
             .output()
             .expect("Failed to execute npm install");
@@ -55,7 +55,7 @@ fn main() {
 
     // Build the React Native Web app
     let output = Command::new("npm")
-        .args(&["run", "build"])
+        .args(["run", "build"])
         .current_dir("app")
         .output()
         .expect("Failed to execute npm run build");

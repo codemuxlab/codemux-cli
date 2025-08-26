@@ -295,6 +295,7 @@ async fn run_quick_session(
 
     // Start web server in background with run mode UI and PTY channels
     let agent_clone = agent.clone();
+    let session_id_clone = session_id.clone();
     let grid_rx_for_web = grid_broadcast_tx.subscribe();
     let pty_channels_for_web = pty_channels.clone();
     tokio::spawn(async move {
@@ -304,6 +305,7 @@ async fn run_quick_session(
             agent_clone,
             grid_rx_for_web,
             pty_channels_for_web,
+            session_id_clone,
         )
         .await
         {

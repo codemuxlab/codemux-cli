@@ -150,3 +150,11 @@ pub struct ProjectInfo {
     pub name: String,
     pub path: String,
 }
+
+#[derive(Clone, Serialize)]
+pub struct ProjectWithSessions {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub sessions: Vec<SessionInfo>,
+}

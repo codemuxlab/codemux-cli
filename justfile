@@ -50,6 +50,13 @@ clippy:
 fmt:
     cargo fmt
 
+# Lint React Native app
+app-lint:
+    cd app && npm run lint
+
+# Lint both Rust and React app
+lint-all: clippy app-lint
+
 # Install to local system
 install:
     cargo install --path .
@@ -75,7 +82,7 @@ watch-test:
     cargo watch -x test
 
 # Full CI pipeline
-ci: fmt clippy test build
+ci: fmt lint-all test build
 
 # Setup development environment
 setup:

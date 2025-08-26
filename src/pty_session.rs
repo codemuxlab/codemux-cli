@@ -7,6 +7,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, Mutex};
 
+/// Default PTY dimensions
+pub const DEFAULT_PTY_COLS: u16 = 80;
+pub const DEFAULT_PTY_ROWS: u16 = 30;
+
 /// Messages that can be sent to control the PTY session
 #[derive(Debug)]
 pub enum PtyControlMessage {
@@ -36,7 +40,7 @@ pub enum KeyCode {
     Char(char),
     /// Backspace key
     Backspace,
-    /// Enter/Return key  
+    /// Enter/Return key
     Enter,
     /// Left arrow key
     Left,
@@ -248,11 +252,11 @@ impl PtySession {
         let initial_cols = std::env::var("COLUMNS")
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(120);
+            .unwrap_or(DEFAULT_PTY_COLS);
         let initial_rows = std::env::var("LINES")
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(30);
+            .unwrap_or(DEFAULT_PTY_ROWS);
 
         let pty_pair = pty_system.openpty(PtySize {
             rows: initial_rows,
