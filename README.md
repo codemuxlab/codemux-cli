@@ -5,12 +5,11 @@ A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, et
 ## Features
 
 - **AI-Focused Terminal Multiplexing**: Run multiple AI coding sessions simultaneously
-- **Rich Web Interface**: Modern React Native Web UI with terminal emulation
+- **Mobile-Ready Interface**: Code from anywhere with React Native UI that runs on phones, tablets, and desktops
 - **Smart Prompt Detection**: Intercepts interactive prompts and provides native web UI components
-- **Independent Cell Rendering**: Optimized terminal rendering with granular updates
 - **Project Management**: Organize sessions by project with daemon mode
 - **Session Persistence**: Maintain sessions across reconnections
-- **Real-time Updates**: WebSocket-based communication with optimized payloads
+- **Real-time Updates**: WebSocket-based communication for responsive interactions
 
 ## Quick Start
 

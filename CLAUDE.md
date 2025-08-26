@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Codemux is a specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with enhanced web UI support. Unlike generic terminal multiplexers, it:
+Codemux is a specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with enhanced web UI support. It's designed for "vibe coding" - a development approach where LLMs are the primary driver of code generation rather than direct typing. Unlike generic terminal multiplexers, it:
 - **Only runs whitelisted AI code agents** for security
 - **Detects and intercepts interactive prompts** (text input, multi-select, confirmations) to provide native web UI components
 - **Provides rich web interfaces** for CLI interactions instead of raw terminal emulation
+- **Enables mobile coding** via React Native, allowing vibe coding from phones and tablets
 
 Operating modes:
 - **Quick mode**: Launch a single AI session immediately

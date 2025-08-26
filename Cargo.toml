@@ -1,8 +1,8 @@
 [package]
 name = "codemux"
-version = "0.0.11"
+version = "0.0.12"
 edition = "2021"
-description = "Terminal multiplexer for AI coding CLIs with enhanced web UI support"
+description = "Terminal multiplexer for AI coding CLIs - code from anywhere with mobile-ready UI"
 homepage = "https://www.codemux.dev"
 repository = "https://github.com/codemuxlab/codemux-cli"
 
