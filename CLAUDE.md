@@ -21,14 +21,13 @@ just                      # Show all available commands
 just setup               # Setup development environment (installs all deps)
 
 # Build commands
-just dev                 # Development build (fast, skips React app)
-just build               # Production build (includes React app)
-just release             # Optimized release build
+just build               # Development build with React app (debug Rust + latest Expo)
+just release             # Optimized release build (includes React app automatically)
 just capture             # Build capture binary only (fast)
 
 # Run commands  
-just run-dev             # Build and run in development mode
-just run-prod            # Build and run in production mode
+just dev                 # Development workflow - debug mode (fast startup)
+just run                 # Production workflow - release mode (includes React app automatically)
 just run-debug           # Run with debug logging
 just daemon              # Start daemon mode
 
@@ -44,7 +43,7 @@ just app-install         # Install React app dependencies
 # Development workflow
 just watch               # Watch mode for development iteration
 just watch-test          # Watch mode for tests
-just ci                  # Full CI pipeline (fmt, clippy, test, build)
+just ci                  # Full CI pipeline (fmt, clippy, test, release)
 just lint-all            # Lint both Rust (clippy) and React app (biome)
 
 # Maintenance
@@ -57,15 +56,16 @@ just clean               # Clean all build artifacts
 ### Direct Cargo Commands
 ```bash
 # Build
-cargo build                               # Development build (skips React app)
-cargo build --release                    # Production build (includes React app)  
-CODEMUX_BUILD_APP=1 cargo build         # Force React app build in dev
+cargo build                               # Development build (skips React app by default)
+cargo build --release                    # Production build (includes React app automatically)  
+CODEMUX_BUILD_APP=1 cargo build         # Force React app build in dev mode
 SKIP_WEB_BUILD=1 cargo build --bin codemux-capture  # Capture binary only
 
 # Run
-cargo run                                # Normal run mode
-cargo run -- run claude --debug         # Debug mode (logs to /tmp/codemux-debug.log)
-cargo run -- daemon                     # Daemon mode
+cargo run --bin codemux                  # Development run mode (debug, no React app by default)
+cargo run --release --bin codemux       # Production run mode (includes React app automatically)
+cargo run --bin codemux -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
+cargo run --bin codemux -- daemon       # Daemon mode
 
 # Capture system
 SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
@@ -106,6 +106,7 @@ npx expo export         # Export for production
 
 1. **CLI Interface** (using clap):
    - `codemux run <tool> [args]` - Quick launch mode
+   - `codemux run <tool> --continue` - Continue from most recent JSONL conversation file
    - `codemux daemon` - Start daemon mode
    - `codemux add-project <path>` - Register a project
    - `codemux list` - List projects/sessions
@@ -188,6 +189,16 @@ When implementing features, consider using:
 - **Debug Logging**: In debug mode (`--debug` flag), all tracing output is written to `/tmp/codemux-debug.log` to avoid interfering with TUI display. In normal mode, only ERROR level messages are logged and discarded.
 - **Output to Terminal**: Use `eprintln!` instead of `println!` to avoid interfering with the TUI display. The TUI uses stdout for rendering, so any `println!` calls will corrupt the display. Use `eprintln!` for debugging or error messages that need to go to stderr.
 
+### Session Continuity (`--continue` flag)
+- **Automatic JSONL Discovery**: Scans `~/.claude/projects/` for the most recently modified `.jsonl` file
+- **Session ID Extraction**: Uses the filename (without extension) as the session ID for continuation
+- **Claude Integration**: Passes `--resume [sessionId]` to Claude for proper session resumption
+- **Fallback Behavior**: If no JSONL files are found, creates a new session normally
+- **Usage Examples**:
+  - `codemux run claude --continue` - Continue most recent Claude session
+  - `codemux run claude --continue --open` - Continue and open web interface
+- **Benefits**: Seamlessly resume conversations without manually specifying session IDs
+
 ### Quality Assurance
 - **Pre-commit Requirements**:
   1. **Rust**: Run `cargo clippy` and fix all warnings
@@ -232,6 +243,7 @@ pub struct GridCell {
 
 ### Current Features
 - **Session Management**: Create, list, and manage AI coding sessions
+- **Session Continuity**: `--continue` flag automatically finds and resumes the most recent JSONL conversation file
 - **Project Organization**: Group sessions by project directory
 - **Git Diff Viewer**: GitHub-style diff display with syntax highlighting
 - **Real-time Updates**: Auto-refreshing git status and diff content

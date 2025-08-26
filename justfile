@@ -4,15 +4,11 @@
 default:
     @just --list
 
-# Development build (fast, skips React app)
-dev:
-    cargo build
-
-# Production build with React app
+# Development build with React app (debug Rust + latest Expo)
 build:
     CODEMUX_BUILD_APP=1 cargo build
 
-# Release build with optimizations
+# Release build with optimizations (includes React app automatically)
 release:
     cargo build --release
 
@@ -61,34 +57,34 @@ lint-all: clippy app-lint
 install:
     cargo install --path .
 
-# Development workflow - build and run
-run-dev: dev
-    cargo run
+# Development workflow - debug mode
+dev *args:
+    cargo run --bin codemux {{ args }}
 
-# Production workflow - build and run
-run-prod: build
-    cargo run
+# Production workflow - release mode (includes React app automatically)
+run *args:
+    cargo run --release --bin codemux {{ args }}
 
 # Run with debug logging
 run-debug:
-    cargo run -- run claude --debug
+    cargo run --bin codemux -- run claude --debug
 
 # Quick development iteration with file watching
 watch:
-    cargo watch -x 'run'
+    cargo watch -x 'run --bin codemux'
 
 # Watch and run tests
 watch-test:
     cargo watch -x test
 
 # Full CI pipeline
-ci: fmt lint-all test build
+ci: fmt lint-all test release
 
 # Setup development environment
 setup:
     @echo "Setting up development environment..."
     @echo "Installing Rust dependencies..."
-    cargo build
+    just build
     @echo "Installing Node.js dependencies..."
     cd app && npm install
     @echo "✅ Setup complete!"
@@ -103,12 +99,12 @@ capture-analyze file:
 
 # Start daemon mode
 daemon:
-    cargo run -- daemon
+    cargo run --bin codemux -- daemon
 
 # Add project to daemon
 add-project path:
-    cargo run -- add-project {{path}}
+    cargo run --bin codemux -- add-project {{path}}
 
 # List daemon projects
 list:
-    cargo run -- list
+    cargo run --bin codemux -- list

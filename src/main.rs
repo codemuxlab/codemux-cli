@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use std::fs;
+use std::time::SystemTime;
 
 use config::Config;
 use pty_session::PtySession;
@@ -67,6 +69,12 @@ enum Commands {
         /// Auto-open the web interface in browser
         #[arg(short, long)]
         open: bool,
+        /// Continue from the most recent JSONL conversation file
+        #[arg(long = "continue")]
+        continue_session: bool,
+        /// Resume from a specific session ID
+        #[arg(long = "resume")]
+        resume_session: Option<String>,
         /// Arguments to pass to the agent
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
@@ -193,15 +201,19 @@ async fn main() -> Result<()> {
             port,
             logfile,
             open,
+            continue_session,
+            resume_session,
             args,
         } => {
             let agent_str = agent.as_str();
             tracing::info!(
-                "Processing Run command - agent: {}, port: {}, logfile: {:?}, open: {}, args: {:?}",
+                "Processing Run command - agent: {}, port: {}, logfile: {:?}, open: {}, continue: {}, resume: {:?}, args: {:?}",
                 agent_str,
                 port,
                 logfile,
                 open,
+                continue_session,
+                resume_session,
                 args
             );
             if let Some(log_rx) = tui_writer_and_rx {
@@ -211,6 +223,8 @@ async fn main() -> Result<()> {
                     port,
                     logfile,
                     open,
+                    continue_session,
+                    resume_session,
                     args,
                     log_rx,
                 )
@@ -237,22 +251,95 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn find_most_recent_jsonl() -> Result<Option<String>> {
+    tracing::info!("Looking for most recent JSONL file in ~/.claude/projects/");
+    
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
+    let claude_projects_path = PathBuf::from(&home).join(".claude").join("projects");
+    
+    if !claude_projects_path.exists() {
+        tracing::info!("No ~/.claude/projects directory found");
+        return Ok(None);
+    }
+    
+    let mut most_recent: Option<(SystemTime, String, PathBuf)> = None;
+    
+    // Walk through all project directories
+    for project_dir in fs::read_dir(&claude_projects_path)? {
+        let project_dir = project_dir?;
+        if !project_dir.file_type()?.is_dir() {
+            continue;
+        }
+        
+        let project_path = project_dir.path();
+        tracing::debug!("Checking project directory: {:?}", project_path);
+        
+        // Look for JSONL files in this project directory
+        if let Ok(entries) = fs::read_dir(&project_path) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let file_path = entry.path();
+                    if let Some(extension) = file_path.extension() {
+                        if extension == "jsonl" {
+                            if let Ok(metadata) = entry.metadata() {
+                                if let Ok(modified) = metadata.modified() {
+                                    let session_id = file_path.file_stem()
+                                        .and_then(|s| s.to_str())
+                                        .unwrap_or("unknown")
+                                        .to_string();
+                                    
+                                    tracing::debug!("Found JSONL file: {:?}, session_id: {}, modified: {:?}", 
+                                                  file_path, session_id, modified);
+                                    
+                                    match &most_recent {
+                                        None => {
+                                            most_recent = Some((modified, session_id, file_path));
+                                        }
+                                        Some((prev_time, _, _)) => {
+                                            if modified > *prev_time {
+                                                most_recent = Some((modified, session_id, file_path));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    if let Some((modified_time, session_id, file_path)) = most_recent {
+        tracing::info!("Most recent JSONL file: {:?}, session_id: {}, modified: {:?}", 
+                      file_path, session_id, modified_time);
+        Ok(Some(session_id))
+    } else {
+        tracing::info!("No JSONL files found in ~/.claude/projects/");
+        Ok(None)
+    }
+}
+
 async fn run_quick_session(
     config: Config,
     agent: String,
     port: u16,
     logfile: Option<PathBuf>,
     open: bool,
+    continue_session: bool,
+    resume_session: Option<String>,
     args: Vec<String>,
     log_rx: tokio::sync::mpsc::UnboundedReceiver<tui_writer::LogEntry>,
 ) -> Result<()> {
     tracing::info!("=== ENTERING run_quick_session ===");
     tracing::info!(
-        "Agent: {}, Port: {}, LogFile: {:?}, Open: {}",
+        "Agent: {}, Port: {}, LogFile: {:?}, Open: {}, Continue: {}, Resume: {:?}",
         agent,
         port,
         logfile,
-        open
+        open,
+        continue_session,
+        resume_session
     );
     tracing::info!("Args: {:?}", args);
     tracing::debug!("Checking if agent '{}' is whitelisted", agent);
@@ -274,16 +361,58 @@ async fn run_quick_session(
 
     // Create PTY session directly (not through SessionManager)
     let final_args = args;
-    let session_id = Uuid::new_v4().to_string();
-    tracing::info!("Generated session ID: {}", session_id);
+    
+    // Validate that both --continue and --resume aren't used together
+    if continue_session && resume_session.is_some() {
+        anyhow::bail!("Cannot use both --continue and --resume flags together. Use --continue to resume the most recent session or --resume <session_id> to resume a specific session.");
+    }
 
-    // Add session ID to args if the agent is Claude
+    // Generate new session ID and determine if we're continuing
+    let session_id = Uuid::new_v4().to_string();
+    let (is_continuing, previous_session_id) = if continue_session {
+        match find_most_recent_jsonl()? {
+            Some(found_session_id) => {
+                tracing::info!("Found previous session to continue: {}", found_session_id);
+                println!("🔄 Continuing from previous session: {}", found_session_id);
+                (true, Some(found_session_id))
+            }
+            None => {
+                tracing::info!("No existing JSONL files found, creating new session");
+                println!("ℹ️  No previous sessions found, creating new session");
+                (false, None)
+            }
+        }
+    } else if let Some(ref session_id_to_resume) = resume_session {
+        tracing::info!("Resuming from specified session: {}", session_id_to_resume);
+        println!("🔄 Resuming from session: {}", session_id_to_resume);
+        (true, Some(session_id_to_resume.clone()))
+    } else {
+        (false, None)
+    };
+    
+    tracing::info!("Using session ID: {}", session_id);
+
+    // Add session ID and continuation flag to args if the agent is Claude
     let mut agent_args = final_args.clone();
     if agent.to_lowercase() == "claude" {
-        tracing::info!("Adding session ID to Claude agent args");
-        agent_args.push("--session-id".to_string());
-        agent_args.push(session_id.clone());
-        tracing::debug!("Final agent args with session ID: {:?}", agent_args);
+        if is_continuing {
+            if let Some(prev_id) = &previous_session_id {
+                tracing::info!("Adding --resume flag with session ID to Claude agent args");
+                agent_args.push("--resume".to_string());
+                agent_args.push(prev_id.clone());
+                tracing::debug!("Final agent args with resume and previous session ID: {:?}", agent_args);
+            } else {
+                tracing::info!("Adding session ID to Claude agent args (no previous session)");
+                agent_args.push("--session-id".to_string());
+                agent_args.push(session_id.clone());
+                tracing::debug!("Final agent args with session ID: {:?}", agent_args);
+            }
+        } else {
+            tracing::info!("Adding session ID to Claude agent args");
+            agent_args.push("--session-id".to_string());
+            agent_args.push(session_id.clone());
+            tracing::debug!("Final agent args with session ID: {:?}", agent_args);
+        }
     } else {
         tracing::debug!("Agent is not Claude, using original args: {:?}", agent_args);
     }
@@ -329,14 +458,27 @@ async fn run_quick_session(
     };
 
     // Print session info
-    println!("\n🚀 CodeMux - {} Agent Session", agent.to_uppercase());
+    if is_continuing {
+        println!("\n🔄 CodeMux - Continuing {} Agent Session", agent.to_uppercase());
+    } else {
+        println!("\n🚀 CodeMux - {} Agent Session", agent.to_uppercase());
+    }
     println!("📋 Session ID: {}", session_id);
     println!("🌐 Web Interface: {}", tui_session_info.url);
     println!("📁 Working Directory: {}", tui_session_info.working_dir);
 
     // Note for Claude sessions
     if agent.to_lowercase() == "claude" {
-        println!("💡 Claude will use session ID: {}", session_id);
+        if is_continuing {
+            if let Some(prev_id) = &previous_session_id {
+                println!("💡 Continuing from previous session: {}", prev_id);
+                println!("💡 New session ID: {}", session_id);
+            } else {
+                println!("💡 Claude will use session ID: {}", session_id);
+            }
+        } else {
+            println!("💡 Claude will use session ID: {}", session_id);
+        }
         let project_path = if tui_session_info.working_dir.starts_with('/') {
             format!("-{}", tui_session_info.working_dir[1..].replace('/', "-"))
         } else {
