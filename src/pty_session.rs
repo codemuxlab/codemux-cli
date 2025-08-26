@@ -55,9 +55,9 @@ impl From<PtySize> for SerializablePtySize {
 pub struct GridCell {
     pub char: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fg_color: Option<String>, // hex color like "#ffffff"
+    pub fg_color: Option<TerminalColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bg_color: Option<String>,
+    pub bg_color: Option<TerminalColor>,
     #[serde(skip_serializing_if = "is_false")]
     pub bold: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -66,6 +66,18 @@ pub struct GridCell {
     pub underline: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TerminalColor {
+    /// Default terminal color (use theme default)
+    Default,
+    /// Standard color index (0-15)
+    Indexed(u8),
+    /// 8-bit color index (0-255)
+    Palette(u8),
+    /// True color RGB values
+    Rgb { r: u8, g: u8, b: u8 },
 }
 
 impl GridCell {
@@ -810,8 +822,8 @@ impl PtySession {
                 if !content.is_empty() {
                     let grid_cell = GridCell {
                         char: content,
-                        fg_color: Self::color_to_hex(cell.fgcolor()),
-                        bg_color: Self::color_to_hex(cell.bgcolor()),
+                        fg_color: Self::vt100_to_terminal_color(cell.fgcolor()),
+                        bg_color: Self::vt100_to_terminal_color(cell.bgcolor()),
                         bold: cell.bold(),
                         italic: cell.italic(),
                         underline: cell.underline(),
@@ -963,8 +975,8 @@ impl PtySession {
                 if let Some(cell) = screen.cell(row, col) {
                     let grid_cell = GridCell {
                         char: cell.contents().to_string(),
-                        fg_color: Self::color_to_hex(cell.fgcolor()),
-                        bg_color: Self::color_to_hex(cell.bgcolor()),
+                        fg_color: Self::vt100_to_terminal_color(cell.fgcolor()),
+                        bg_color: Self::vt100_to_terminal_color(cell.bgcolor()),
                         bold: cell.bold(),
                         italic: cell.italic(),
                         underline: cell.underline(),
@@ -1023,39 +1035,18 @@ impl PtySession {
         }
     }
 
-    /// Convert VT100 color to hex string
-    fn color_to_hex(color: vt100::Color) -> Option<String> {
+    /// Convert VT100 color to terminal color
+    fn vt100_to_terminal_color(color: vt100::Color) -> Option<TerminalColor> {
         match color {
             vt100::Color::Default => None,
             vt100::Color::Idx(idx) => {
-                // Convert 8-bit color index to approximate hex
-                // This is a simplified mapping - could be more accurate
-                match idx {
-                    0 => Some("#000000".to_string()),  // Black
-                    1 => Some("#800000".to_string()),  // Red
-                    2 => Some("#008000".to_string()),  // Green
-                    3 => Some("#808000".to_string()),  // Yellow
-                    4 => Some("#000080".to_string()),  // Blue
-                    5 => Some("#800080".to_string()),  // Magenta
-                    6 => Some("#008080".to_string()),  // Cyan
-                    7 => Some("#c0c0c0".to_string()),  // White
-                    8 => Some("#808080".to_string()),  // Bright Black
-                    9 => Some("#ff0000".to_string()),  // Bright Red
-                    10 => Some("#00ff00".to_string()), // Bright Green
-                    11 => Some("#ffff00".to_string()), // Bright Yellow
-                    12 => Some("#0000ff".to_string()), // Bright Blue
-                    13 => Some("#ff00ff".to_string()), // Bright Magenta
-                    14 => Some("#00ffff".to_string()), // Bright Cyan
-                    15 => Some("#ffffff".to_string()), // Bright White
-                    _ => Some(format!(
-                        "#{:02x}{:02x}{:02x}",
-                        ((idx - 16) / 36) * 51,
-                        (((idx - 16) % 36) / 6) * 51,
-                        ((idx - 16) % 6) * 51
-                    )),
+                if idx <= 15 {
+                    Some(TerminalColor::Indexed(idx))
+                } else {
+                    Some(TerminalColor::Palette(idx))
                 }
             }
-            vt100::Color::Rgb(r, g, b) => Some(format!("#{:02x}{:02x}{:02x}", r, g, b)),
+            vt100::Color::Rgb(r, g, b) => Some(TerminalColor::Rgb { r, g, b }),
         }
     }
 }

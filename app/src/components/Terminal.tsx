@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, memo, useCallback } from 'react';
-import { View, Text, TextInput, ScrollView } from 'react-native';
-import { useTerminalStore } from '../stores/terminalStore';
+import { View, Text, TextInput, ScrollView, TouchableOpacity } from 'react-native';
+import { useTerminalStore, availableThemes } from '../stores/terminalStore';
 import { TerminalCell } from './TerminalCell';
 
 interface TerminalProps {
@@ -83,6 +83,87 @@ const TerminalInput = memo(({ onSubmit }: { onSubmit: (text: string) => void }) 
 });
 
 TerminalInput.displayName = 'TerminalInput';
+
+// Background component with theme support
+const TerminalBackground = memo(({ children }: { children: React.ReactNode }) => {
+  const theme = useTerminalStore((state) => state.theme);
+  
+  return (
+    <View className="flex-1 w-full" style={{ backgroundColor: theme.background }}>
+      {children}
+    </View>
+  );
+});
+
+TerminalBackground.displayName = 'TerminalBackground';
+
+// Dark/Light mode toggle component
+const DarkLightToggle = memo(() => {
+  const currentTheme = useTerminalStore((state) => state.theme);
+  const setTheme = useTerminalStore((state) => state.setTheme);
+  
+  const isDark = currentTheme.name === 'Default Dark';
+  
+  const toggleMode = () => {
+    if (isDark) {
+      setTheme(availableThemes.find(t => t.name === 'Light') || availableThemes[1]);
+    } else {
+      setTheme(availableThemes.find(t => t.name === 'Default Dark') || availableThemes[0]);
+    }
+  };
+
+  return (
+    <TouchableOpacity 
+      onPress={toggleMode}
+      className="bg-gray-700 px-3 py-1 rounded mr-2"
+    >
+      <Text className="text-white text-xs">
+        {isDark ? '☀️ Light' : '🌙 Dark'}
+      </Text>
+    </TouchableOpacity>
+  );
+});
+
+DarkLightToggle.displayName = 'DarkLightToggle';
+
+// Theme selector component
+const ThemeSelector = memo(() => {
+  const [showThemes, setShowThemes] = useState(false);
+  const currentTheme = useTerminalStore((state) => state.theme);
+  const setTheme = useTerminalStore((state) => state.setTheme);
+
+  return (
+    <View className="relative">
+      <TouchableOpacity 
+        onPress={() => setShowThemes(!showThemes)}
+        className="bg-gray-700 px-3 py-1 rounded"
+      >
+        <Text className="text-white text-xs">{currentTheme.name}</Text>
+      </TouchableOpacity>
+      
+      {showThemes && (
+        <View className="absolute top-8 right-0 bg-gray-800 rounded shadow-lg z-10 min-w-32">
+          {availableThemes.map((theme) => (
+            <TouchableOpacity
+              key={theme.name}
+              onPress={() => {
+                setTheme(theme);
+                setShowThemes(false);
+              }}
+              className="p-2 border-b border-gray-600 last:border-b-0"
+            >
+              <Text className={`text-xs ${currentTheme.name === theme.name ? 'text-blue-400 font-bold' : 'text-white'}`}>
+                {theme.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+});
+
+ThemeSelector.displayName = 'ThemeSelector';
 
 export default function Terminal({ sessionId }: TerminalProps) {
   const [isConnected, setIsConnected] = useState(false);
@@ -183,15 +264,19 @@ export default function Terminal({ sessionId }: TerminalProps) {
 
   return (
     <View className="flex-1 bg-black">
-      {/* Connection status */}
-      <View className={`p-2 items-center ${isConnected ? 'bg-green-700' : 'bg-red-700'}`}>
+      {/* Connection status and theme controls */}
+      <View className={`p-2 flex-row justify-between items-center ${isConnected ? 'bg-green-700' : 'bg-red-700'}`}>
         <Text className="text-white text-xs">
           {isConnected ? `Connected to session ${sessionId.slice(0, 8)}` : 'Disconnected'}
         </Text>
+        <View className="flex-row items-center">
+          <DarkLightToggle />
+          <ThemeSelector />
+        </View>
       </View>
 
       {/* Terminal grid container - constrain ScrollView size */}
-      <View className="flex-1 w-full bg-gray-900">
+      <TerminalBackground>
         <ScrollView
           ref={scrollViewRef}
           className="w-full"
@@ -206,7 +291,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
         >
           <TerminalGrid />
         </ScrollView>
-      </View>
+      </TerminalBackground>
 
       {/* Input area */}
       <TerminalInput onSubmit={handleInputSubmit} />

@@ -1,4 +1,4 @@
-use crate::pty_session::{PtyChannels, PtyInputMessage};
+use crate::pty_session::{PtyChannels, PtyInputMessage, TerminalColor};
 use crate::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
 use crossterm::{
@@ -950,12 +950,12 @@ fn render_terminal_from_grid(
                     .fg(cell
                         .fg_color
                         .as_ref()
-                        .and_then(|c| parse_hex_color(c))
+                        .and_then(|c| terminal_color_to_ratatui(c))
                         .unwrap_or(Color::Reset))
                     .bg(cell
                         .bg_color
                         .as_ref()
-                        .and_then(|c| parse_hex_color(c))
+                        .and_then(|c| terminal_color_to_ratatui(c))
                         .unwrap_or(Color::Reset))
                     .add_modifier(if cell.bold {
                         Modifier::BOLD
@@ -1028,17 +1028,35 @@ fn render_terminal_from_grid(
     lines
 }
 
-/// Parse hex color string to ratatui Color
-fn parse_hex_color(hex: &str) -> Option<Color> {
-    if hex.len() != 7 || !hex.starts_with('#') {
-        return None;
+/// Convert terminal color to ratatui Color
+fn terminal_color_to_ratatui(color: &TerminalColor) -> Option<Color> {
+    match color {
+        TerminalColor::Default => None,
+        TerminalColor::Indexed(idx) => {
+            // Use standard 16 colors
+            match *idx {
+                0 => Some(Color::Black),
+                1 => Some(Color::Red),
+                2 => Some(Color::Green),
+                3 => Some(Color::Yellow),
+                4 => Some(Color::Blue),
+                5 => Some(Color::Magenta),
+                6 => Some(Color::Cyan),
+                7 => Some(Color::White),
+                8 => Some(Color::DarkGray),
+                9 => Some(Color::LightRed),
+                10 => Some(Color::LightGreen),
+                11 => Some(Color::LightYellow),
+                12 => Some(Color::LightBlue),
+                13 => Some(Color::LightMagenta),
+                14 => Some(Color::LightCyan),
+                15 => Some(Color::Gray),
+                _ => Some(Color::Indexed(*idx)),
+            }
+        }
+        TerminalColor::Palette(idx) => Some(Color::Indexed(*idx)),
+        TerminalColor::Rgb { r, g, b } => Some(Color::Rgb(*r, *g, *b)),
     }
-
-    let r = u8::from_str_radix(&hex[1..3], 16).ok()?;
-    let g = u8::from_str_radix(&hex[3..5], 16).ok()?;
-    let b = u8::from_str_radix(&hex[5..7], 16).ok()?;
-
-    Some(Color::Rgb(r, g, b))
 }
 
 // Convert crossterm KeyEvent to bytes for PTY input

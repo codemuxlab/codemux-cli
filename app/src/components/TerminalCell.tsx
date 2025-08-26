@@ -1,6 +1,6 @@
 import React, { memo } from 'react';
 import { Text } from 'react-native';
-import { useTerminalStore, GridCell } from '../stores/terminalStore';
+import { useTerminalStore, GridCell, TerminalColor } from '../stores/terminalStore';
 
 interface TerminalCellProps {
   row: number;
@@ -11,32 +11,29 @@ interface TerminalCellProps {
 export const TerminalCell = memo(({ row, col }: TerminalCellProps) => {
   const cellKey = `${row}-${col}`;
   
-  // Subscribe only to this specific cell (cursor is now part of cell data)
+  // Subscribe to both the cell data and the theme resolver
   const cell = useTerminalStore((state) => state.cells.get(cellKey));
+  const resolveColor = useTerminalStore((state) => state.resolveColor);
+  const theme = useTerminalStore((state) => state.theme);
   
-  // Log first few cells to debug rendering
-  if (row === 0 && col < 3 && cell) {
-    console.log(`Rendering cell [${row},${col}]:`, cell);
-  }
   
   const char = cell?.char || ' ';
   
   const getForegroundColor = (): string => {
     if (cell?.reverse) {
-      return cell?.bg_color || '#000000';
+      return resolveColor(cell?.bg_color, true);
     }
-    return cell?.fg_color || '#c9d1d9';
+    return resolveColor(cell?.fg_color, false);
   };
   
   const getBackgroundColor = (): string => {
     if (cell?.has_cursor) {
-      return '#58a6ff';
+      return theme.cursor;
     }
     if (cell?.reverse) {
-      return cell?.fg_color || '#c9d1d9';
+      return resolveColor(cell?.fg_color, false);
     }
-    // Add a subtle background for debugging - empty cells should be barely visible
-    return cell?.bg_color || (char === ' ' ? '#111111' : 'transparent');
+    return resolveColor(cell?.bg_color, true);
   };
   
   // Build dynamic classes for styles that change

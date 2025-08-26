@@ -1,22 +1,84 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 
+export type TerminalColor = 
+  | 'Default'
+  | { Indexed: number }
+  | { Palette: number }
+  | { Rgb: { r: number; g: number; b: number } };
+
 export interface GridCell {
   char: string;
-  fg_color: string | null;
-  bg_color: string | null;
+  fg_color: TerminalColor | null;
+  bg_color: TerminalColor | null;
   bold: boolean;
   italic: boolean;
   underline: boolean;
   reverse: boolean;
-  has_cursor?: boolean;  // Add cursor as part of cell data
+  has_cursor?: boolean;
 }
+
+export interface TerminalTheme {
+  name: string;
+  background: string;
+  foreground: string;
+  cursor: string;
+  selection: string;
+  colors: string[]; // 16 standard colors (0-15)
+}
+
+// Default dark theme based on VS Code
+export const defaultTheme: TerminalTheme = {
+  name: 'Default Dark',
+  background: '#0d1117',
+  foreground: '#c9d1d9',
+  cursor: '#58a6ff',
+  selection: '#264f78',
+  colors: [
+    '#000000', '#cd3131', '#0dbc79', '#e5e510',
+    '#2472c8', '#bc3fbc', '#11a8cd', '#e5e5e5',
+    '#666666', '#f14c4c', '#23d18b', '#f5f543',
+    '#3b8eea', '#d670d6', '#29b8db', '#ffffff',
+  ]
+};
+
+// Additional themes
+export const lightTheme: TerminalTheme = {
+  name: 'Light',
+  background: '#ffffff',
+  foreground: '#1f2328',
+  cursor: '#0969da',
+  selection: '#b6d7ff',
+  colors: [
+    '#24292f', '#cf222e', '#116329', '#4d2d00',
+    '#0969da', '#8250df', '#1b7c83', '#656d76',
+    '#8c959f', '#ff6b6b', '#2da44e', '#fb8500',
+    '#0969da', '#8250df', '#3192aa', '#1f2328',
+  ]
+};
+
+export const monochromeTheme: TerminalTheme = {
+  name: 'Monochrome',
+  background: '#1a1a1a',
+  foreground: '#c0c0c0',
+  cursor: '#ffffff',
+  selection: '#404040',
+  colors: [
+    '#000000', '#808080', '#a0a0a0', '#c0c0c0',
+    '#606060', '#909090', '#b0b0b0', '#d0d0d0',
+    '#404040', '#888888', '#a8a8a8', '#c8c8c8',
+    '#707070', '#989898', '#b8b8b8', '#ffffff',
+  ]
+};
+
+export const availableThemes = [defaultTheme, lightTheme, monochromeTheme];
 
 interface TerminalState {
   size: { rows: number; cols: number };
   cells: Map<string, GridCell>;
   cursor: { row: number; col: number };
   cursor_visible: boolean;
+  theme: TerminalTheme;
   
   // Actions
   updateSize: (rows: number, cols: number) => void;
@@ -26,6 +88,8 @@ interface TerminalState {
   setCursorVisible: (visible: boolean) => void;
   clearCells: () => void;
   handleGridUpdate: (message: any) => void;
+  setTheme: (theme: TerminalTheme) => void;
+  resolveColor: (color: TerminalColor | null, isBackground?: boolean) => string;
 }
 
 export const useTerminalStore = create<TerminalState>()(
@@ -34,6 +98,7 @@ export const useTerminalStore = create<TerminalState>()(
   cells: new Map(),
   cursor: { row: 0, col: 0 },
   cursor_visible: true,
+  theme: defaultTheme,
   
   updateSize: (rows, cols) => set(() => ({
     size: { rows, cols }
@@ -133,10 +198,6 @@ export const useTerminalStore = create<TerminalState>()(
           reverse: cell.reverse ?? false,
         };
         
-        // Log a sample cell for debugging
-        if (row === 0 && col < 5) {
-          console.log(`Cell [${row},${col}]:`, fullCell);
-        }
         
         newCells.set(`${row}-${col}`, fullCell);
       });
@@ -207,5 +268,61 @@ export const useTerminalStore = create<TerminalState>()(
     
     // Only return updates if there are actual changes
     return hasChanges ? updates : {};
-  })
+  }),
+
+  setTheme: (theme) => set(() => ({
+    theme
+  })),
+
+  resolveColor: (color, isBackground = false) => {
+    const state = get();
+    
+    if (!color) {
+      return isBackground ? state.theme.background : state.theme.foreground;
+    }
+
+    // Handle different color variant structures
+    if (typeof color === 'string' && color === 'Default') {
+      return isBackground ? state.theme.background : state.theme.foreground;
+    }
+
+    if (typeof color === 'object') {
+      // Handle Indexed variant
+      if ('Indexed' in color && typeof color.Indexed === 'number') {
+        const index = color.Indexed;
+        if (index >= 0 && index < state.theme.colors.length) {
+          return state.theme.colors[index];
+        }
+        return isBackground ? state.theme.background : state.theme.foreground;
+      }
+
+      // Handle Palette variant
+      if ('Palette' in color && typeof color.Palette === 'number') {
+        const index = color.Palette;
+        // For 8-bit palette colors (16-255), use a simplified mapping
+        if (index < 16) {
+          return state.theme.colors[index] || (isBackground ? state.theme.background : state.theme.foreground);
+        } else if (index < 232) {
+          // 216 color cube (6x6x6)
+          const n = index - 16;
+          const r = Math.floor(n / 36) * 51;
+          const g = Math.floor((n % 36) / 6) * 51;
+          const b = (n % 6) * 51;
+          return `rgb(${r}, ${g}, ${b})`;
+        } else {
+          // Grayscale ramp (24 levels)
+          const level = Math.floor((index - 232) * 255 / 23);
+          return `rgb(${level}, ${level}, ${level})`;
+        }
+      }
+
+      // Handle Rgb variant
+      if ('Rgb' in color && typeof color.Rgb === 'object') {
+        const { r, g, b } = color.Rgb;
+        return `rgb(${r}, ${g}, ${b})`;
+      }
+    }
+
+    return isBackground ? state.theme.background : state.theme.foreground;
+  }
 })))
