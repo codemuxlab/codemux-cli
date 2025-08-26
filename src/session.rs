@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::pty_session::{PtySession, PtyChannels};
+use crate::pty_session::{PtyChannels, PtySession};
 
 pub struct SessionManager {
     config: Config,
@@ -55,7 +55,8 @@ impl SessionManager {
         }
 
         let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args)?;
-        self.sessions.insert(session_id.clone(), (session, channels));
+        self.sessions
+            .insert(session_id.clone(), (session, channels));
 
         Ok(SessionInfo {
             id: session_id,
@@ -73,12 +74,14 @@ impl SessionManager {
     }
 
     pub fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
-        self.sessions.get(session_id).map(|(session, _)| SessionInfo {
-            id: session_id.to_string(),
-            agent: session.agent().to_string(),
-            project: None,
-            status: "running".to_string(),
-        })
+        self.sessions
+            .get(session_id)
+            .map(|(session, _)| SessionInfo {
+                id: session_id.to_string(),
+                agent: session.agent().to_string(),
+                project: None,
+                status: "running".to_string(),
+            })
     }
 
     pub fn list_sessions(&self) -> Vec<SessionInfo> {

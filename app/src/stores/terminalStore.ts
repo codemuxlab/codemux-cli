@@ -73,6 +73,37 @@ export const monochromeTheme: TerminalTheme = {
 
 export const availableThemes = [defaultTheme, lightTheme, monochromeTheme];
 
+// Web key event types (matching backend)
+export interface WebKeyModifiers {
+  shift: boolean;
+  ctrl: boolean;
+  alt: boolean;
+  meta: boolean;
+}
+
+export type WebKeyCode = 
+  | { Char: string }
+  | 'Backspace'
+  | 'Enter'
+  | 'Left'
+  | 'Right'
+  | 'Up'
+  | 'Down'
+  | 'Home'
+  | 'End'
+  | 'PageUp'
+  | 'PageDown'
+  | 'Tab'
+  | 'Delete'
+  | 'Insert'
+  | { F: number }
+  | 'Esc';
+
+export interface WebKeyEvent {
+  code: WebKeyCode;
+  modifiers: WebKeyModifiers;
+}
+
 interface TerminalState {
   size: { rows: number; cols: number };
   cells: Map<string, GridCell>;

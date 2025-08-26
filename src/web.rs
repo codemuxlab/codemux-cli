@@ -371,19 +371,38 @@ async fn handle_socket(
                             match parsed.get("type").and_then(|t| t.as_str()) {
                                 Some("input") => {
                                     if let Some(data) = parsed.get("data").and_then(|d| d.as_str()) {
-                                        // Web input is sent as-is, text and \r are sent separately
+                                        // Legacy input: raw text data
                                         let input_bytes = data.as_bytes().to_vec();
 
                                         let input_msg = PtyInputMessage {
-                                            data: input_bytes,
-                                            client_id: format!("websocket-{}", session_id),
+                                            input: crate::pty_session::PtyInput::Raw {
+                                                data: input_bytes,
+                                                client_id: format!("websocket-{}", session_id),
+                                            },
                                         };
 
-                                        tracing::debug!("WebSocket input: {:?} -> {:?}",
-                                            data, String::from_utf8_lossy(&input_msg.data));
+                                        tracing::debug!("WebSocket raw input: {:?}", data);
 
                                         if pty_input_tx.send(input_msg).is_err() {
                                             tracing::error!("Failed to send input to PTY");
+                                            break;
+                                        }
+                                    }
+                                }
+                                Some("key") => {
+                                    // New key event input
+                                    if let Ok(key_event) = serde_json::from_value::<crate::pty_session::KeyEvent>(parsed.clone()) {
+                                        tracing::debug!("WebSocket key event: {:?}", key_event);
+
+                                        let input_msg = PtyInputMessage {
+                                            input: crate::pty_session::PtyInput::Key {
+                                                event: key_event,
+                                                client_id: format!("websocket-{}", session_id),
+                                            },
+                                        };
+
+                                        if pty_input_tx.send(input_msg).is_err() {
+                                            tracing::error!("Failed to send key event to PTY");
                                             break;
                                         }
                                     }

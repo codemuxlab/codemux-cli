@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, memo, useCallback } from 'react';
 import { View, Text, TextInput, ScrollView, TouchableOpacity } from 'react-native';
-import { useTerminalStore, availableThemes } from '../stores/terminalStore';
+import { useTerminalStore, availableThemes, WebKeyEvent, WebKeyCode, WebKeyModifiers } from '../stores/terminalStore';
 import { TerminalCell } from './TerminalCell';
 
 interface TerminalProps {
@@ -169,6 +169,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
+  const terminalRef = useRef<View>(null);
 
   useEffect(() => {
     // Connect to WebSocket
@@ -255,15 +256,127 @@ export default function Terminal({ sessionId }: TerminalProps) {
     }
   }, []);
 
+  const sendKeyEvent = useCallback((keyEvent: WebKeyEvent) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      const message = {
+        type: 'key',
+        ...keyEvent
+      };
+      wsRef.current.send(JSON.stringify(message));
+    }
+  }, []);
+
   const handleInputSubmit = useCallback((text: string) => {
-    // Send the message text
-    sendInput(text);
-    // Send carriage return to submit
-    sendInput('\r');
-  }, [sendInput]);
+    // Send each character as a key event for better terminal compatibility
+    for (const char of text) {
+      sendKeyEvent({
+        code: { Char: char },
+        modifiers: { shift: false, ctrl: false, alt: false, meta: false }
+      });
+    }
+    // Send Enter key
+    sendKeyEvent({
+      code: 'Enter',
+      modifiers: { shift: false, ctrl: false, alt: false, meta: false }
+    });
+  }, [sendKeyEvent]);
+
+  // Handle keyboard events for direct key input
+  const handleKeyDown = useCallback((event: any) => {
+    // Prevent default browser behavior for most keys
+    if (!['F5', 'F12'].includes(event.key)) {
+      event.preventDefault();
+    }
+
+    const modifiers = {
+      shift: event.shiftKey || false,
+      ctrl: event.ctrlKey || false,
+      alt: event.altKey || false,
+      meta: event.metaKey || false,
+    };
+
+    let keyCode: any;
+    
+    // Map common keys
+    switch (event.key) {
+      case 'Enter':
+        keyCode = 'Enter';
+        break;
+      case 'Backspace':
+        keyCode = 'Backspace';
+        break;
+      case 'Tab':
+        keyCode = 'Tab';
+        break;
+      case 'Escape':
+        keyCode = 'Esc';
+        break;
+      case 'ArrowLeft':
+        keyCode = 'Left';
+        break;
+      case 'ArrowRight':
+        keyCode = 'Right';
+        break;
+      case 'ArrowUp':
+        keyCode = 'Up';
+        break;
+      case 'ArrowDown':
+        keyCode = 'Down';
+        break;
+      case 'Home':
+        keyCode = 'Home';
+        break;
+      case 'End':
+        keyCode = 'End';
+        break;
+      case 'PageUp':
+        keyCode = 'PageUp';
+        break;
+      case 'PageDown':
+        keyCode = 'PageDown';
+        break;
+      case 'Delete':
+        keyCode = 'Delete';
+        break;
+      case 'Insert':
+        keyCode = 'Insert';
+        break;
+      default:
+        // Handle function keys
+        if (event.key.startsWith('F') && event.key.length > 1) {
+          const fNum = parseInt(event.key.slice(1));
+          if (!isNaN(fNum)) {
+            keyCode = { F: fNum };
+          }
+        } else if (event.key.length === 1) {
+          // Regular character
+          keyCode = { Char: event.key };
+        } else {
+          return;
+        }
+        break;
+    }
+
+    sendKeyEvent({
+      code: keyCode,
+      modifiers: modifiers,
+    });
+  }, [sendKeyEvent]);
+
+  // Set up keyboard event listener
+  useEffect(() => {
+    const handleKeyDownEvent = (event: KeyboardEvent) => {
+      handleKeyDown(event);
+    };
+
+    document.addEventListener('keydown', handleKeyDownEvent);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDownEvent);
+    };
+  }, [handleKeyDown]);
 
   return (
-    <View className="flex-1 bg-black">
+    <View className="flex-1 bg-black" ref={terminalRef}>
       {/* Connection status and theme controls */}
       <View className={`p-2 flex-row justify-between items-center ${isConnected ? 'bg-green-700' : 'bg-red-700'}`}>
         <Text className="text-white text-xs">

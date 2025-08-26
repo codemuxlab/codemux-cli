@@ -20,11 +20,72 @@ pub enum PtyControlMessage {
     },
 }
 
+/// Key event modifiers
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KeyModifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub meta: bool,
+}
+
+/// Key codes that can be sent to terminal
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum KeyCode {
+    /// A character key
+    Char(char),
+    /// Backspace key
+    Backspace,
+    /// Enter/Return key  
+    Enter,
+    /// Left arrow key
+    Left,
+    /// Right arrow key
+    Right,
+    /// Up arrow key
+    Up,
+    /// Down arrow key
+    Down,
+    /// Home key
+    Home,
+    /// End key
+    End,
+    /// Page Up key
+    PageUp,
+    /// Page Down key
+    PageDown,
+    /// Tab key
+    Tab,
+    /// Delete key
+    Delete,
+    /// Insert key
+    Insert,
+    /// Function keys F1-F24
+    F(u8),
+    /// Escape key
+    Esc,
+}
+
+/// Key event structure
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KeyEvent {
+    pub code: KeyCode,
+    pub modifiers: KeyModifiers,
+}
+
+/// Input message that can be either raw bytes or key events
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PtyInput {
+    /// Raw byte data (legacy mode)
+    Raw { data: Vec<u8>, client_id: String },
+    /// Key event (preferred mode)
+    Key { event: KeyEvent, client_id: String },
+}
+
 /// Messages representing PTY input from clients
 #[derive(Debug, Clone)]
 pub struct PtyInputMessage {
-    pub data: Vec<u8>,
-    pub client_id: String,
+    pub input: PtyInput,
 }
 
 /// Messages representing PTY output to clients
@@ -629,8 +690,19 @@ impl PtySession {
         let input_task = tokio::spawn(async move {
             let mut input_rx = input_rx;
             while let Some(msg) = input_rx.recv().await {
+                let bytes = match &msg.input {
+                    PtyInput::Raw { data, .. } => {
+                        tracing::debug!("Processing raw input: {} bytes", data.len());
+                        data.clone()
+                    }
+                    PtyInput::Key { event, .. } => {
+                        tracing::debug!("Processing key event: {:?}", event);
+                        Self::key_event_to_bytes(event)
+                    }
+                };
+
                 let mut writer_guard = input_writer.lock().await;
-                if let Err(e) = writer_guard.write_all(&msg.data) {
+                if let Err(e) = writer_guard.write_all(&bytes) {
                     tracing::error!("Failed to write to PTY: {}", e);
                     break;
                 }
@@ -1047,6 +1119,93 @@ impl PtySession {
                 }
             }
             vt100::Color::Rgb(r, g, b) => Some(TerminalColor::Rgb { r, g, b }),
+        }
+    }
+
+    /// Convert key event to terminal byte sequence
+    fn key_event_to_bytes(event: &KeyEvent) -> Vec<u8> {
+        let KeyEvent { code, modifiers } = event;
+
+        match code {
+            KeyCode::Char(c) => {
+                if modifiers.ctrl {
+                    match *c {
+                        'a'..='z' => vec![(*c as u8) - b'a' + 1],
+                        'A'..='Z' => vec![(*c as u8) - b'A' + 1],
+                        '[' => vec![0x1b],  // Ctrl+[ = ESC
+                        '\\' => vec![0x1c], // Ctrl+\
+                        ']' => vec![0x1d],  // Ctrl+]
+                        '^' => vec![0x1e],  // Ctrl+^
+                        '_' => vec![0x1f],  // Ctrl+_
+                        ' ' => vec![0x00],  // Ctrl+Space = NUL
+                        _ => c.to_string().into_bytes(),
+                    }
+                } else if modifiers.alt {
+                    let mut bytes = vec![0x1b]; // ESC prefix for Alt
+                    bytes.extend(c.to_string().into_bytes());
+                    bytes
+                } else {
+                    c.to_string().into_bytes()
+                }
+            }
+            KeyCode::Enter => vec![b'\r'],
+            KeyCode::Backspace => vec![0x7f], // DEL
+            KeyCode::Tab => {
+                if modifiers.shift {
+                    vec![0x1b, b'[', b'Z'] // Shift+Tab
+                } else {
+                    vec![b'\t']
+                }
+            }
+            KeyCode::Esc => vec![0x1b],
+            KeyCode::Delete => vec![0x1b, b'[', b'3', b'~'],
+            KeyCode::Insert => vec![0x1b, b'[', b'2', b'~'],
+            KeyCode::Home => vec![0x1b, b'[', b'H'],
+            KeyCode::End => vec![0x1b, b'[', b'F'],
+            KeyCode::PageUp => vec![0x1b, b'[', b'5', b'~'],
+            KeyCode::PageDown => vec![0x1b, b'[', b'6', b'~'],
+            KeyCode::Up => {
+                if modifiers.shift {
+                    vec![0x1b, b'[', b'1', b';', b'2', b'A']
+                } else {
+                    vec![0x1b, b'[', b'A']
+                }
+            }
+            KeyCode::Down => {
+                if modifiers.shift {
+                    vec![0x1b, b'[', b'1', b';', b'2', b'B']
+                } else {
+                    vec![0x1b, b'[', b'B']
+                }
+            }
+            KeyCode::Right => {
+                if modifiers.shift {
+                    vec![0x1b, b'[', b'1', b';', b'2', b'C']
+                } else {
+                    vec![0x1b, b'[', b'C']
+                }
+            }
+            KeyCode::Left => {
+                if modifiers.shift {
+                    vec![0x1b, b'[', b'1', b';', b'2', b'D']
+                } else {
+                    vec![0x1b, b'[', b'D']
+                }
+            }
+            KeyCode::F(n) => {
+                match *n {
+                    1..=4 => vec![0x1b, b'O', b'P' + (n - 1)], // F1-F4
+                    5 => vec![0x1b, b'[', b'1', b'5', b'~'],
+                    6 => vec![0x1b, b'[', b'1', b'7', b'~'],
+                    7 => vec![0x1b, b'[', b'1', b'8', b'~'],
+                    8 => vec![0x1b, b'[', b'1', b'9', b'~'],
+                    9 => vec![0x1b, b'[', b'2', b'0', b'~'],
+                    10 => vec![0x1b, b'[', b'2', b'1', b'~'],
+                    11 => vec![0x1b, b'[', b'2', b'3', b'~'],
+                    12 => vec![0x1b, b'[', b'2', b'4', b'~'],
+                    _ => vec![], // F13+ not commonly supported
+                }
+            }
         }
     }
 }

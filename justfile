@@ -16,6 +16,10 @@ build:
 release:
     cargo build --release
 
+# Build capture binary only (fast, skips React app)
+capture:
+    SKIP_WEB_BUILD=1 cargo build --release --bin codemux-capture
+
 # Build React Native Web app only
 app-build:
     cd app && npm run build
@@ -82,9 +86,13 @@ setup:
     cd app && npm install
     @echo "✅ Setup complete!"
 
+# Run capture session recording
+capture-record agent output:
+    SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent {{agent}} --output {{output}}
+
 # Run capture analysis
 capture-analyze file:
-    cargo run --bin codemux-capture -- --analyze {{file}} --verbose
+    SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --analyze {{file}} --verbose
 
 # Start daemon mode
 daemon:

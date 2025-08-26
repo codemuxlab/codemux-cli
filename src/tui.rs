@@ -265,8 +265,10 @@ impl SessionTui {
             tracing::debug!("Sending to PTY: {:?} (bytes: {:?})", key, input_bytes);
 
             let input_msg = PtyInputMessage {
-                data: input_bytes,
-                client_id: "tui".to_string(),
+                input: crate::pty_session::PtyInput::Raw {
+                    data: input_bytes,
+                    client_id: "tui".to_string(),
+                },
             };
 
             if let Err(e) = channels.input_tx.send(input_msg) {

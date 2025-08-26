@@ -1,17 +1,23 @@
-use std::process::Command;
-use std::path::Path;
 use std::env;
+use std::path::Path;
+use std::process::Command;
 
 fn main() {
+    // Skip React Native build if SKIP_WEB_BUILD is set
+    if env::var("SKIP_WEB_BUILD").is_ok() {
+        println!("cargo:warning=Skipping React Native Web build (SKIP_WEB_BUILD set)");
+        return;
+    }
+
     // Watch for changes in the React app
     println!("cargo:rerun-if-changed=app/src");
     println!("cargo:rerun-if-changed=app/package.json");
     println!("cargo:rerun-if-changed=app/app.json");
     println!("cargo:rerun-if-changed=app/tsconfig.json");
     println!("cargo:rerun-if-changed=app/tailwind.config.js");
-    
+
     // Only build the React app in release mode or when explicitly requested
-    let should_build_app = env::var("CARGO_FEATURE_BUILD_APP").is_ok() 
+    let should_build_app = env::var("CARGO_FEATURE_BUILD_APP").is_ok()
         || env::var("PROFILE").unwrap_or_default() == "release"
         || env::var("CODEMUX_BUILD_APP").is_ok();
 
@@ -29,7 +35,7 @@ fn main() {
     // Check if node_modules exists, if not install dependencies
     if !Path::new("app/node_modules").exists() {
         println!("cargo:warning=Installing React Native Web dependencies...");
-        
+
         let npm_install = Command::new("npm")
             .args(&["install"])
             .current_dir("app")

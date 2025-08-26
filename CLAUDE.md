@@ -15,23 +15,66 @@ Operating modes:
 
 ## Development Commands
 
-### Rust Backend
+### Just Commands (Recommended - uses justfile)
 ```bash
-cargo build                   # Development build (skips React app build)
-cargo build --release        # Production build (includes React app build)
-CODEMUX_BUILD_APP=1 cargo build  # Force React app build in development
+just                      # Show all available commands
+just setup               # Setup development environment (installs all deps)
 
-cargo run                    # Normal run mode
-cargo run -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
+# Build commands
+just dev                 # Development build (fast, skips React app)
+just build               # Production build (includes React app)
+just release             # Optimized release build
+just capture             # Build capture binary only (fast)
 
-# Capture system (separate binary)
-cargo run --bin codemux-capture -- --agent claude --output session.jsonl
-cargo run --bin codemux-capture -- --analyze session.jsonl --verbose
+# Run commands  
+just run-dev             # Build and run in development mode
+just run-prod            # Build and run in production mode
+just run-debug           # Run with debug logging
+just daemon              # Start daemon mode
 
-cargo test
-cargo test -- --nocapture  # To see println! output during tests
-cargo fmt        # Format code
-cargo clippy     # Lint code (with clippy improvements applied)
+# Capture system
+just capture-record claude session.jsonl  # Record session to JSONL
+just capture-analyze session.jsonl        # Analyze captured session
+
+# React Native app
+just app-dev             # Start React app dev server
+just app-build           # Build React app only
+just app-install         # Install React app dependencies
+
+# Development workflow
+just watch               # Watch mode for development iteration
+just watch-test          # Watch mode for tests
+just ci                  # Full CI pipeline (fmt, clippy, test, build)
+
+# Maintenance
+just fmt                 # Format code
+just clippy              # Lint code
+just test                # Run tests
+just clean               # Clean all build artifacts
+```
+
+### Direct Cargo Commands
+```bash
+# Build
+cargo build                               # Development build (skips React app)
+cargo build --release                    # Production build (includes React app)  
+CODEMUX_BUILD_APP=1 cargo build         # Force React app build in dev
+SKIP_WEB_BUILD=1 cargo build --bin codemux-capture  # Capture binary only
+
+# Run
+cargo run                                # Normal run mode
+cargo run -- run claude --debug         # Debug mode (logs to /tmp/codemux-debug.log)
+cargo run -- daemon                     # Daemon mode
+
+# Capture system
+SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
+SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --analyze session.jsonl --verbose
+
+# Test & Quality
+cargo test                               # Run tests
+cargo test -- --nocapture               # Show println! output during tests
+cargo fmt                                # Format code  
+cargo clippy                             # Lint code
 ```
 
 ### React Native App (Expo)
@@ -41,20 +84,6 @@ npm install              # Install dependencies
 npx expo start          # Start development server
 npx expo start --web    # Start web development server
 npx expo export         # Export for production
-```
-
-### Just Commands (Recommended)
-```bash
-just                     # Show all available commands
-just setup              # Setup development environment
-just dev                # Development build (fast)
-just build              # Production build (includes React app)
-just release            # Optimized release build
-just run-dev            # Build and run in development mode
-just run-debug          # Run with debug logging
-just app-dev            # Start React app dev server
-just watch              # Watch mode for development
-just ci                 # Full CI pipeline (fmt, clippy, test, build)
 ```
 
 **Note**: The React Native app uses:
