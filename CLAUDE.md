@@ -250,3 +250,33 @@ pub struct GridCell {
 - **Terminal Interface**: Full terminal emulation with scaling and proper cursor handling
 - **Cross-platform**: Works on web browsers via React Native Web
 - **Debug Capture**: Session recording and analysis for troubleshooting
+
+## Release Process
+
+### Versioning Convention
+
+We use semantic versioning with the following convention:
+- **v0.0.x**: Pre-release versions during initial development
+- **v0.x.x**: Beta versions with major features but may have breaking changes
+- **v1.x.x**: Stable releases with backwards compatibility guarantees
+
+### Automated Releases
+
+Releases are automated via cargo-dist:
+
+1. Create a version tag: `git tag v0.0.2` (or appropriate version)
+2. Push the tag: `git push origin v0.0.2`
+3. GitHub Actions will automatically build and publish to:
+   - GitHub Releases (with multi-platform binaries)
+   - Homebrew tap (`codemuxlab/homebrew-tap`)
+
+### Manual Release Steps
+
+1. Update version in `Cargo.toml` to match the intended tag version (e.g., `version = "0.0.2"` for tag `v0.0.2`)
+2. Ensure `CLAUDE.md` and documentation are up to date
+3. Run full CI pipeline: `just ci`
+4. Create and push version tag as shown above
+
+**Important**: The version in `Cargo.toml` must match the git tag version (without the `v` prefix). For example:
+- `Cargo.toml`: `version = "0.0.2"`
+- Git tag: `v0.0.2`
