@@ -120,12 +120,6 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: 'app/package-lock.json'
       - name: Install Rust non-interactively if not already installed
         if: ${{ matrix.container }}
         run: |
@@ -133,6 +127,12 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: "Setup Node.js"
+        uses: "actions/setup-node@v4"
+        with:
+          "cache": "npm"
+          "cache-dependency-path": "app/package-lock.json"
+          "node-version": "18"
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest
