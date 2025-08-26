@@ -23,6 +23,16 @@ A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, et
 brew install codemuxlab/tap/codemux
 ```
 
+#### npm
+
+```bash
+# Install globally via npm
+npm install -g codemux
+
+# Or run directly without installing
+npx codemux run claude
+```
+
 #### From Source
 
 For development or if you prefer building from source:
@@ -74,6 +84,34 @@ codemux list
 
 # Stop the daemon
 codemux stop
+```
+
+#### Running daemon with PM2 (Recommended)
+
+For production use, run the daemon with [PM2](https://pm2.keymetrics.io/) for automatic restarts and process management:
+
+```bash
+# Install PM2 globally
+npm install -g pm2
+
+# Start daemon with PM2
+pm2 start codemux --name "codemux-daemon" -- daemon
+
+# View daemon status
+pm2 status
+
+# View daemon logs
+pm2 logs codemux-daemon
+
+# Restart daemon
+pm2 restart codemux-daemon
+
+# Stop daemon
+pm2 stop codemux-daemon
+
+# Auto-start daemon on system boot
+pm2 startup
+pm2 save
 ```
 
 ## Web Interface
