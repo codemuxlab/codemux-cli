@@ -2,6 +2,33 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
+fn find_npm_command() -> &'static str {
+    if cfg!(target_os = "windows") {
+        // On Windows, try npm.cmd first (standard location), then npm
+        if Command::new("npm.cmd").arg("--version").output().is_ok() {
+            "npm.cmd"
+        } else if Command::new("npm").arg("--version").output().is_ok() {
+            "npm"
+        } else {
+            // Try common Windows npm locations
+            let potential_paths = [
+                "C:\\Program Files\\nodejs\\npm.cmd",
+                "C:\\Program Files (x86)\\nodejs\\npm.cmd",
+                "C:\\ProgramData\\chocolatey\\lib\\nodejs\\tools\\npm.cmd",
+            ];
+            
+            for path in &potential_paths {
+                if Path::new(path).exists() {
+                    return path;
+                }
+            }
+            "npm" // fallback
+        }
+    } else {
+        "npm"
+    }
+}
+
 fn main() {
     // Skip React Native build if SKIP_WEB_BUILD is set
     if env::var("SKIP_WEB_BUILD").is_ok() {
@@ -36,7 +63,10 @@ fn main() {
     if !Path::new("app/node_modules").exists() {
         println!("cargo:warning=Installing React Native Web dependencies...");
 
-        let npm_install = Command::new("npm")
+        let npm_cmd = find_npm_command();
+        println!("cargo:warning=Using npm command: {}", npm_cmd);
+
+        let npm_install = Command::new(npm_cmd)
             .args(["install"])
             .current_dir("app")
             .output()
@@ -54,7 +84,8 @@ fn main() {
     println!("cargo:warning=Building React Native Web app (this may take a while)...");
 
     // Build the React Native Web app
-    let output = Command::new("npm")
+    let npm_cmd = find_npm_command();
+    let output = Command::new(npm_cmd)
         .args(["run", "build"])
         .current_dir("app")
         .output()
