@@ -9,8 +9,6 @@ pub enum ClientMessage {
     Input { data: PtyInputMessage },
     #[serde(rename = "resize")]
     Resize { rows: u16, cols: u16 },
-    #[serde(rename = "request_keyframe")]
-    RequestKeyframe,
 }
 
 /// Messages sent from server to client

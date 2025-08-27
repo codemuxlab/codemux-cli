@@ -246,12 +246,8 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
 
     let session_id = session_info.id.clone();
 
-    // Connect to the session via WebSocket
-    println!("🔌 Connecting to session via WebSocket...");
-    let session_connection = client.connect_to_session(&session_id).await?;
-
-    // Convert WebSocket connection into PTY-like channels for TUI
-    let pty_channels = session_connection.into_pty_channels();
+    // Don't connect WebSocket immediately - will connect when entering interactive mode
+    println!("🔄 Session created - WebSocket will connect when entering interactive mode");
 
     // Create session info for TUI
     let working_dir = env::current_dir()
@@ -311,7 +307,7 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
 
     // Try to start TUI, fall back to simple display if it fails
     tracing::info!("Attempting to create TUI...");
-    match SessionTui::new(pty_channels, url.clone()) {
+    match SessionTui::new(session_id.clone()) {
         Ok(mut tui) => {
             tracing::info!("TUI created successfully");
             // Run TUI in a separate task

@@ -169,7 +169,7 @@ pub enum GridUpdateMessage {
     /// Full terminal state keyframe (sent to new clients)
     Keyframe {
         size: SerializablePtySize,
-        cells: HashMap<(u16, u16), GridCell>, // (row, col) -> cell
+        cells: Vec<((u16, u16), GridCell)>, // (row, col) -> cell
         cursor: (u16, u16),                   // (row, col)
         cursor_visible: bool,                 // whether cursor is visible
         timestamp: std::time::SystemTime,
@@ -507,7 +507,7 @@ impl PtySession {
                                 let parser_guard = processor_vt_parser.lock().await;
                                 let screen = parser_guard.screen();
                                 let cursor_pos = (screen.cursor_position().0, screen.cursor_position().1);
-                                tracing::debug!("Cursor BEFORE processing: ({}, {})", cursor_pos.0, cursor_pos.1);
+                                tracing::trace!("Cursor BEFORE processing: ({}, {})", cursor_pos.0, cursor_pos.1);
                                 cursor_pos
                             };
 
@@ -542,7 +542,7 @@ impl PtySession {
                                 let mut cursor_vis_guard = processor_cursor_visible.lock().await;
                                 if *cursor_vis_guard != vt_cursor_visible {
                                     *cursor_vis_guard = vt_cursor_visible;
-                                    tracing::debug!("Cursor visibility changed to: {}", vt_cursor_visible);
+                                    tracing::trace!("Cursor visibility changed to: {}", vt_cursor_visible);
                                 }
                             }
 
@@ -558,12 +558,12 @@ impl PtySession {
                             let parser_guard = processor_vt_parser.lock().await;
                             let screen = parser_guard.screen();
                             let cursor_pos = (screen.cursor_position().0, screen.cursor_position().1);
-                            tracing::debug!("Cursor AFTER processing: ({}, {})", cursor_pos.0, cursor_pos.1);
+                            tracing::trace!("Cursor AFTER processing: ({}, {})", cursor_pos.0, cursor_pos.1);
                             cursor_pos
                         };
 
                         if cursor_before != cursor_after {
-                            tracing::debug!("Cursor moved during processing: ({}, {}) -> ({}, {})",
+                            tracing::trace!("Cursor moved during processing: ({}, {}) -> ({}, {})",
                                 cursor_before.0, cursor_before.1, cursor_after.0, cursor_after.1);
                         }
 
@@ -985,7 +985,7 @@ impl PtySession {
         let cursor_changed = old_cursor != new_cursor;
 
         if cursor_changed {
-            tracing::debug!(
+            tracing::trace!(
                 "Cursor position changed: ({}, {}) -> ({}, {})",
                 old_cursor.0,
                 old_cursor.1,
@@ -993,7 +993,7 @@ impl PtySession {
                 new_cursor.1
             );
         } else {
-            tracing::debug!(
+            tracing::trace!(
                 "Cursor position stable at: ({}, {})",
                 new_cursor.0,
                 new_cursor.1
@@ -1023,7 +1023,7 @@ impl PtySession {
             tracing::debug!("Sending keyframe with {} cells", current_grid.len());
             Some(GridUpdateMessage::Keyframe {
                 size: size.into(),
-                cells: current_grid,
+                cells: current_grid.clone().into_iter().collect(),
                 cursor: new_cursor,
                 cursor_visible: is_cursor_visible,
                 timestamp,
@@ -1127,7 +1127,7 @@ impl PtySession {
 
         GridUpdateMessage::Keyframe {
             size: size.into(),
-            cells: current_grid,
+            cells: current_grid.into_iter().collect(),
             cursor,
             cursor_visible: is_cursor_visible,
             timestamp: std::time::SystemTime::now(),
@@ -1243,3 +1243,4 @@ pub struct SessionInfo {
     pub agent: String,
     pub args: Vec<String>,
 }
+

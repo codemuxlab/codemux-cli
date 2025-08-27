@@ -417,13 +417,8 @@ impl SessionConnection {
                                 }
                             }
                             PtyControlMessage::RequestKeyframe { response_tx } => {
-                                let client_msg = ClientMessage::RequestKeyframe;
-                                if let Ok(json) = serde_json::to_string(&client_msg) {
-                                    if ws_stream.send(Message::Text(json)).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                // TODO: Handle the response_tx properly if needed
+                                // Client should not request keyframes - server sends them automatically
+                                tracing::warn!("Client received RequestKeyframe - ignoring as server handles keyframes automatically");
                                 drop(response_tx);
                             }
                             PtyControlMessage::Terminate => {
@@ -533,11 +528,6 @@ impl SessionConnection {
     pub async fn send_resize(&mut self, rows: u16, cols: u16) -> Result<()> {
         self.send_message(ClientMessage::Resize { rows, cols })
             .await
-    }
-
-    /// Request a keyframe (full terminal state)
-    pub async fn request_keyframe(&mut self) -> Result<()> {
-        self.send_message(ClientMessage::RequestKeyframe).await
     }
 
     /// Close the connection

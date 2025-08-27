@@ -134,8 +134,8 @@ pub struct SessionTui {
     terminal_cursor: (u16, u16),
     terminal_cursor_visible: bool,
     terminal_size: (u16, u16),
-    // New channel-based PTY communication
-    pty_channels: PtyChannels,
+    // New channel-based PTY communication (optional until WebSocket connects)
+    pty_channels: Option<PtyChannels>,
     // Keyframe state tracking
     has_received_keyframe: bool,
     // Incremental rendering state
@@ -143,8 +143,8 @@ pub struct SessionTui {
     dirty_cells: std::collections::HashSet<(u16, u16)>,
     cursor_dirty: bool,
     last_render_time: std::time::Instant,
-    // Web URL for opening browser
-    web_url: String,
+    // Session ID for generating URLs
+    session_id: String,
 }
 
 pub struct SessionInfo {
@@ -156,7 +156,7 @@ pub struct SessionInfo {
 }
 
 impl SessionTui {
-    pub fn new(pty_channels: PtyChannels, web_url: String) -> Result<Self> {
+    pub fn new(session_id: String) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -173,13 +173,51 @@ impl SessionTui {
             terminal_cursor: (0, 0),
             terminal_cursor_visible: true, // Default to visible
             terminal_size: (DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS),
-            pty_channels,
+            pty_channels: None, // Will be set when WebSocket connects
             has_received_keyframe: Default::default(), // false
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),
             cursor_dirty: false,
             last_render_time: std::time::Instant::now(),
-            web_url,
+            session_id,
+        })
+    }
+
+    pub fn set_pty_channels(&mut self, pty_channels: PtyChannels) {
+        self.pty_channels = Some(pty_channels);
+    }
+
+    fn get_web_url(&self) -> String {
+        format!("http://localhost:8765/session/{}", self.session_id)
+    }
+
+
+    pub async fn connect_websocket(&mut self) -> Result<()> {
+        use crate::client::http::CodeMuxClient;
+        
+        // Create client and connect to WebSocket
+        let client = CodeMuxClient::new("http://localhost:8765".to_string());
+        let session_connection = client.connect_to_session(&self.session_id).await?;
+        
+        // Convert SessionConnection to PtyChannels
+        let pty_channels = session_connection.into_pty_channels();
+        
+        // Store the channels
+        self.set_pty_channels(pty_channels);
+        
+        Ok(())
+    }
+
+    pub fn disconnect_websocket(&mut self) {
+        // Dropping pty_channels will close the WebSocket connection
+        self.pty_channels = None;
+        self.has_received_keyframe = false; // Reset keyframe state
+        self.status_message = "WebSocket disconnected - Press Ctrl+T for interactive mode".to_string();
+    }
+
+    fn get_pty_channels(&self) -> Result<&PtyChannels> {
+        self.pty_channels.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("PTY channels not available - WebSocket not connected yet")
         })
     }
 
@@ -356,7 +394,14 @@ impl SessionTui {
     }
 
     async fn resize_pty_to_match_tui(&self, terminal_area: Rect) {
-        let channels = &self.pty_channels;
+        let channels = match self.get_pty_channels() {
+            Ok(channels) => channels,
+            Err(_) => {
+                // PTY not connected yet, skip resize
+                tracing::debug!("PTY not connected yet, skipping resize");
+                return;
+            }
+        };
         let resize_msg = PtyControlMessage::Resize {
             rows: terminal_area.height,
             cols: terminal_area.width,
@@ -376,7 +421,13 @@ impl SessionTui {
     async fn send_input_to_pty(&self, key: &crossterm::event::KeyEvent) {
         tracing::debug!("send_input_to_pty called with key: {:?}", key);
 
-        let channels = &self.pty_channels;
+        let channels = match self.get_pty_channels() {
+            Ok(channels) => channels,
+            Err(_) => {
+                tracing::debug!("PTY not connected yet, ignoring input");
+                return;
+            }
+        };
         // Convert crossterm key event to bytes for PTY
         if let Some(input_bytes) = key_to_bytes(key) {
             tracing::debug!("Sending to PTY: {:?} (bytes: {:?})", key, input_bytes);
@@ -548,7 +599,7 @@ impl SessionTui {
                                     KeyCode::Char('o') => {
                                         // Open web interface
                                         self.status_message = "Opening web interface...".to_string();
-                                        if let Err(e) = open::that(&self.web_url) {
+                                        if let Err(e) = open::that(self.get_web_url()) {
                                             self.status_message = format!("Failed to open browser: {}", e);
                                         } else {
                                             self.status_message = "Web interface opened".to_string();
@@ -623,30 +674,38 @@ impl SessionTui {
     ) -> Result<bool> {
         tracing::debug!("=== ENTERING INTERACTIVE MODE ===");
 
-        // Request keyframe for current terminal state when entering interactive mode
-        let channels = &self.pty_channels;
-
-        tracing::debug!("Requesting keyframe for TUI interactive mode");
-        // Add timeout to prevent hanging
-        let keyframe_result =
-            tokio::time::timeout(Duration::from_millis(500), channels.request_keyframe()).await;
-
-        match keyframe_result {
-            Ok(Ok(keyframe)) => {
-                tracing::debug!("Received keyframe for TUI interactive mode");
-                self.handle_grid_update(keyframe);
-            }
-            Ok(Err(e)) => {
-                tracing::warn!("Failed to request keyframe for TUI: {}", e);
-            }
-            Err(_timeout) => {
-                tracing::warn!("Keyframe request timed out after 500ms");
+        // Connect WebSocket if not already connected
+        if self.pty_channels.is_none() {
+            self.status_message = "Connecting to session via WebSocket...".to_string();
+            match self.connect_websocket().await {
+                Ok(()) => {
+                    tracing::info!("WebSocket connected successfully");
+                    self.status_message = "Connected - Interactive mode active".to_string();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to connect WebSocket: {}", e);
+                    self.status_message = format!("Connection failed: {}", e);
+                    return Ok(false);
+                }
             }
         }
 
+        // Clone grid_tx for receiving updates - server will automatically send keyframe
+        let grid_tx = {
+            let channels = match self.get_pty_channels() {
+                Ok(channels) => channels,
+                Err(e) => {
+                    tracing::error!("Cannot enter interactive mode - PTY not connected: {}", e);
+                    return Ok(false);
+                }
+            };
+            
+            channels.grid_tx.clone()
+        };
+
         tracing::debug!("Keyframe handling complete, setting up interactive mode");
         let mut event_stream = EventStream::new();
-        let mut grid_update_stream = self.pty_channels.grid_tx.subscribe();
+        let mut grid_update_stream = grid_tx.subscribe();
 
         // Add a periodic timer to keep the display updated
         use tokio::time::interval;
@@ -714,6 +773,7 @@ impl SessionTui {
                                     tracing::info!("SWITCHING TO MONITORING MODE");
 
                                     self.interactive_mode = false;
+                                    self.disconnect_websocket();
                                     self.status_message = "Interactive mode OFF - Press Ctrl+T to toggle on".to_string();
 
                                     // Re-render and exit to switch modes

@@ -115,6 +115,11 @@ async fn handle_socket(
                     tracing::error!("Failed to send initial keyframe to new WebSocket client");
                     return;
                 }
+            } else {
+                tracing::error!(
+                    "Initial keyframe cannot be deserialized: {:?}",
+                    serde_json::to_string(&keyframe_ws_msg)
+                );
             }
         }
         Err(e) => {
@@ -213,23 +218,6 @@ async fn handle_socket(
                                     tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
                                     // Send resize control message to PTY
                                     // TODO: Handle resize if needed
-                                }
-                                ClientMessage::RequestKeyframe => {
-                                    tracing::debug!("WebSocket received keyframe request for session: {}", session_id);
-                                    // Send current keyframe
-                                    match pty_channels.request_keyframe().await {
-                                        Ok(keyframe) => {
-                                            let keyframe_msg = ServerMessage::Grid { data: keyframe };
-                                            if let Ok(keyframe_str) = serde_json::to_string(&keyframe_msg) {
-                                                if socket.send(Message::Text(keyframe_str)).await.is_err() {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("Failed to get keyframe on request: {}", e);
-                                        }
-                                    }
                                 }
                             }
                         } else {
