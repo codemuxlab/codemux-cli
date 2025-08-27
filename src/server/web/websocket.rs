@@ -1,0 +1,259 @@
+use axum::{
+    extract::{ws::WebSocketUpgrade, Path, State},
+    response::IntoResponse,
+};
+
+use super::types::AppState;
+use crate::core::{ClientMessage, ServerMessage};
+
+pub async fn websocket_handler(
+    Path(session_id): Path<String>,
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, session_id, state))
+}
+
+async fn handle_socket(
+    mut socket: axum::extract::ws::WebSocket,
+    session_id: String,
+    state: AppState,
+) {
+    use axum::extract::ws::Message;
+
+    tracing::info!(
+        "WebSocket connection established for session: {}",
+        session_id
+    );
+
+    // Get PTY channels from session manager
+    tracing::debug!("WebSocket requesting channels for session: {}", session_id);
+    let pty_channels = if let Some(channels) = state
+        .session_manager
+        .get_session_channels(&session_id)
+        .await
+    {
+        tracing::debug!("WebSocket found channels for session: {}", session_id);
+        channels
+    } else {
+        tracing::error!(
+            "WebSocket: No PTY channels found for session: {} - session may not exist or failed to start",
+            session_id
+        );
+        return;
+    };
+
+    // Send initial connection message
+    let session_short = if session_id.len() >= 8 {
+        &session_id[..8]
+    } else {
+        &session_id
+    };
+    let welcome_msg = ServerMessage::Output {
+        data: crate::core::pty_session::PtyOutputMessage {
+            data: format!(
+                "Connected to session {} - Claude Code TUI starting...\r\n",
+                session_short
+            )
+            .into_bytes(),
+            timestamp: std::time::SystemTime::now(),
+        },
+    };
+    if let Ok(welcome_str) = serde_json::to_string(&welcome_msg) {
+        tracing::debug!("WebSocket sending welcome message: {}", welcome_str);
+        if socket.send(Message::Text(welcome_str)).await.is_err() {
+            tracing::error!("Failed to send welcome message via WebSocket");
+            return;
+        }
+    }
+
+    // Subscribe to PTY size updates
+    let mut size_rx = pty_channels.size_tx.subscribe();
+    if let Ok(current_size) = size_rx.try_recv() {
+        let size_msg = serde_json::json!({
+            "type": "pty_size",
+            "rows": current_size.rows,
+            "cols": current_size.cols
+        });
+        if socket
+            .send(Message::Text(size_msg.to_string()))
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+
+    // Subscribe to PTY grid updates (our new primary channel)
+    let mut grid_rx = pty_channels.grid_tx.subscribe();
+    tracing::debug!("Subscribed to grid update channel");
+
+    // Subscribe to PTY output for fallback/debug (raw bytes)
+    let mut pty_output_rx = pty_channels.output_tx.subscribe();
+    tracing::debug!("Subscribed to PTY output channel");
+
+    // Clone input channel for sending to PTY
+    let pty_input_tx = pty_channels.input_tx.clone();
+
+    // Request keyframe for new client (so they get current terminal state immediately)
+    match pty_channels.request_keyframe().await {
+        Ok(keyframe) => {
+            tracing::debug!("Received keyframe for new WebSocket client");
+            let keyframe_ws_msg = ServerMessage::Grid { data: keyframe };
+            if let Ok(keyframe_str) = serde_json::to_string(&keyframe_ws_msg) {
+                // Test that we can deserialize what we're about to send
+                match serde_json::from_str::<ServerMessage>(&keyframe_str) {
+                    Ok(_) => {
+                        tracing::debug!("WebSocket sending initial keyframe: {} chars (verified deserializable)", keyframe_str.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Initial keyframe cannot be deserialized: {}", e);
+                        tracing::error!("Message content: {}", keyframe_str);
+                    }
+                }
+                if socket.send(Message::Text(keyframe_str)).await.is_err() {
+                    tracing::error!("Failed to send initial keyframe to new WebSocket client");
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to request keyframe for new WebSocket client: {}", e);
+        }
+    }
+
+    // Main WebSocket handling loop
+    loop {
+        tokio::select! {
+            // Forward grid updates to WebSocket (primary channel)
+            grid_update = grid_rx.recv() => {
+                match grid_update {
+                    Ok(update) => {
+                        let ws_msg = ServerMessage::Grid { data: update };
+                        if let Ok(grid_msg) = serde_json::to_string(&ws_msg) {
+                            // Test that we can deserialize what we're about to send
+                            match serde_json::from_str::<ServerMessage>(&grid_msg) {
+                                Ok(_) => {
+                                    tracing::debug!("WebSocket sending grid update: {} chars (verified deserializable)", grid_msg.len());
+                                }
+                                Err(e) => {
+                                    tracing::error!("Grid update message cannot be deserialized: {}", e);
+                                    tracing::error!("Message content: {}", grid_msg);
+                                }
+                            }
+                            if socket.send(Message::Text(grid_msg)).await.is_err() {
+                                tracing::error!("Failed to send grid update via WebSocket");
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("PTY grid channel closed");
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::warn!("WebSocket lagged behind grid updates");
+                        // Continue processing
+                    }
+                }
+            }
+            // Optional: Forward raw PTY output for debugging
+            pty_output = pty_output_rx.recv() => {
+                match pty_output {
+                    Ok(_output_msg) => {
+                        // Debug: show raw PTY output
+                        tracing::debug!("WebSocket received raw PTY output: {} bytes", _output_msg.data.len());
+                        // Skip raw output - we're using grid updates now
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("PTY output channel closed");
+                        // Don't break - we can continue with just grid updates
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::debug!("WebSocket lagged behind raw PTY output");
+                    }
+                }
+            }
+            // Forward PTY size updates to WebSocket
+            size_update = size_rx.recv() => {
+                match size_update {
+                    Ok(size) => {
+                        let ws_msg = ServerMessage::PtySize { rows: size.rows, cols: size.cols };
+                        if let Ok(size_msg_str) = serde_json::to_string(&ws_msg) {
+                            if socket.send(Message::Text(size_msg_str)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        tracing::info!("PTY size channel closed");
+                        // Don't break - we can continue without size updates
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        tracing::warn!("WebSocket lagged behind PTY size updates");
+                        // Continue processing
+                    }
+                }
+            }
+            // Handle WebSocket messages from client
+            ws_msg = socket.recv() => {
+                match ws_msg {
+                    Some(Ok(Message::Text(text))) => {
+                        tracing::debug!("WebSocket received message: {} chars", text.len());
+                        if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
+                            match client_msg {
+                                ClientMessage::Input { data } => {
+                                    tracing::debug!("WebSocket received input message");
+                                    if pty_input_tx.send(data).is_err() {
+                                        tracing::error!("Failed to send input to PTY");
+                                        break;
+                                    }
+                                }
+                                ClientMessage::Resize { rows, cols } => {
+                                    tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
+                                    // Send resize control message to PTY
+                                    // TODO: Handle resize if needed
+                                }
+                                ClientMessage::RequestKeyframe => {
+                                    tracing::debug!("WebSocket received keyframe request for session: {}", session_id);
+                                    // Send current keyframe
+                                    match pty_channels.request_keyframe().await {
+                                        Ok(keyframe) => {
+                                            let keyframe_msg = ServerMessage::Grid { data: keyframe };
+                                            if let Ok(keyframe_str) = serde_json::to_string(&keyframe_msg) {
+                                                if socket.send(Message::Text(keyframe_str)).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to get keyframe on request: {}", e);
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            tracing::warn!("Failed to parse WebSocket message: {}", text);
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        break;
+                    }
+                    Some(Ok(Message::Ping(data))) => {
+                        if socket.send(Message::Pong(data)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Err(e)) => {
+                        tracing::error!("WebSocket error: {}", e);
+                        break;
+                    }
+                    None => break,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    tracing::info!("WebSocket connection closed for session: {}", session_id);
+}
