@@ -154,9 +154,11 @@ async fn handle_socket(
 
     // Subscribe to PTY grid updates (our new primary channel)
     let mut grid_rx = pty_channels.grid_tx.subscribe();
+    tracing::debug!("Subscribed to grid update channel");
 
     // Subscribe to PTY output for fallback/debug (raw bytes)
     let mut pty_output_rx = pty_channels.output_tx.subscribe();
+    tracing::debug!("Subscribed to PTY output channel");
 
     // Clone input channel for sending to PTY
     let pty_input_tx = pty_channels.input_tx.clone();

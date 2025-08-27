@@ -52,9 +52,16 @@ pub struct SessionManagerHandle {
 // Internal session manager state (runs in its own task)
 struct SessionManagerActor {
     config: Config,
-    sessions: HashMap<String, (PtySession, PtyChannels)>,
+    sessions: HashMap<String, SessionState>,
     projects: HashMap<String, Project>,
     command_rx: mpsc::UnboundedReceiver<SessionCommand>,
+}
+
+struct SessionState {
+    id: String,
+    agent: String,
+    channels: PtyChannels,
+    project_id: Option<String>,
 }
 
 struct Project {
@@ -313,8 +320,29 @@ impl SessionManagerActor {
 
         tracing::debug!("Creating PTY session with ID: {}, agent: {}", session_id, agent);
         let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args)?;
-        tracing::debug!("PTY session created, storing in sessions map");
-        self.sessions.insert(session_id.clone(), (session, channels));
+        tracing::debug!("PTY session created, spawning start task");
+        
+        // Clone channels for storage
+        let channels_clone = channels.clone();
+        
+        // Spawn the PTY session start task to actually begin reading from the PTY
+        let session_id_clone = session_id.clone();
+        tokio::spawn(async move {
+            tracing::info!("Starting PTY session tasks for {}", session_id_clone);
+            if let Err(e) = session.start().await {
+                tracing::error!("PTY session {} failed: {}", session_id_clone, e);
+            }
+            tracing::info!("PTY session {} completed", session_id_clone);
+        });
+        
+        // Store the session state
+        let session_state = SessionState {
+            id: session_id.clone(),
+            agent: agent.clone(),
+            channels: channels_clone,
+            project_id: resolved_project_id.clone(),
+        };
+        self.sessions.insert(session_id.clone(), session_state);
         tracing::info!("Session {} stored successfully in SessionManager", session_id);
 
         Ok(SessionInfo {
@@ -326,20 +354,17 @@ impl SessionManagerActor {
     }
     
     fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
-        self.sessions.get(session_id).map(|(session, _)| {
-            let pty_info = session.get_info();
-            SessionInfo {
-                id: pty_info.id,
-                agent: pty_info.agent,
-                project: None, // TODO: Get from session or project mapping
-                status: "running".to_string(),
-            }
+        self.sessions.get(session_id).map(|state| SessionInfo {
+            id: state.id.clone(),
+            agent: state.agent.clone(),
+            project: state.project_id.clone(),
+            status: "running".to_string(),
         })
     }
     
     fn get_session_channels(&self, session_id: &str) -> Option<PtyChannels> {
         tracing::debug!("Looking for session channels: {}, total sessions: {}", session_id, self.sessions.len());
-        let result = self.sessions.get(session_id).map(|(_, channels)| channels.clone());
+        let result = self.sessions.get(session_id).map(|state| state.channels.clone());
         if result.is_some() {
             tracing::debug!("Found channels for session: {}", session_id);
         } else {
@@ -349,21 +374,18 @@ impl SessionManagerActor {
     }
     
     fn list_sessions(&self) -> Vec<SessionInfo> {
-        self.sessions.iter().map(|(_, (session, _))| {
-            let pty_info = session.get_info();
-            SessionInfo {
-                id: pty_info.id,
-                agent: pty_info.agent,
-                project: None, // TODO: Get from session or project mapping  
-                status: "running".to_string(),
-            }
+        self.sessions.iter().map(|(_, state)| SessionInfo {
+            id: state.id.clone(),
+            agent: state.agent.clone(),
+            project: state.project_id.clone(),
+            status: "running".to_string(),
         }).collect()
     }
     
     async fn close_session(&mut self, session_id: &str) -> Result<()> {
-        if let Some((_, channels)) = self.sessions.remove(session_id) {
+        if let Some(state) = self.sessions.remove(session_id) {
             // Send terminate signal
-            if let Err(e) = channels.control_tx.send(crate::core::pty_session::PtyControlMessage::Terminate) {
+            if let Err(e) = state.channels.control_tx.send(crate::core::pty_session::PtyControlMessage::Terminate) {
                 tracing::warn!("Failed to send terminate signal to session {}: {}", session_id, e);
             }
             Ok(())
@@ -411,11 +433,11 @@ impl SessionManagerActor {
         tracing::info!("Shutting down {} sessions", self.sessions.len());
         
         // Send terminate signal to all sessions
-        for (session_id, (_, channels)) in &self.sessions {
+        for (session_id, state) in &self.sessions {
             tracing::info!("Terminating session: {}", session_id);
             
             // Send terminate control message
-            if let Err(e) = channels.control_tx.send(crate::core::pty_session::PtyControlMessage::Terminate) {
+            if let Err(e) = state.channels.control_tx.send(crate::core::pty_session::PtyControlMessage::Terminate) {
                 tracing::warn!("Failed to send terminate signal to session {}: {}", session_id, e);
             }
         }
