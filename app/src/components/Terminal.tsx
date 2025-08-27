@@ -12,6 +12,7 @@ import {
 	useTerminalStore,
 	type WebKeyEvent,
 } from "../stores/terminalStore";
+import type { ClientMessage, ServerMessage } from "../types/bindings";
 import { TerminalCell } from "./TerminalCell";
 
 interface TerminalProps {
@@ -186,43 +187,77 @@ export default function Terminal({ sessionId }: TerminalProps) {
 	const scrollViewRef = useRef<ScrollView>(null);
 	const terminalRef = useRef<View>(null);
 
-	const handleWebSocketMessage = useCallback(
-		(message: { type: string; [key: string]: unknown }) => {
-			console.log("WebSocket message received:", message.type, message);
+	const handleWebSocketMessage = useCallback((message: ServerMessage) => {
+		console.log("WebSocket message received:", message.type, message);
 
-			switch (message.type) {
-				case "grid_update":
-					console.log("Grid update:", {
-						type: message.update_type,
-						cellCount: message.cells?.length,
-						size: message.size,
-						cursor: message.cursor,
-						cursor_visible: message.cursor_visible,
+		switch (message.type) {
+			case "grid_update":
+				if ("Keyframe" in message) {
+					console.log("Grid update keyframe:", {
+						size: message.Keyframe.size,
+						cellCount: message.Keyframe.cells.length,
+						cursor: message.Keyframe.cursor,
+						cursor_visible: message.Keyframe.cursor_visible,
 					});
 
-					// Log first few cells for debugging
-					if (message.cells?.length > 0) {
-						console.log("Sample cells:", message.cells.slice(0, 5));
-					}
+					// Transform keyframe data to match store expectations
+					const transformedMessage = {
+						type: "grid_update",
+						size: message.Keyframe.size,
+						cells: message.Keyframe.cells,
+						cursor: {
+							row: message.Keyframe.cursor[0],
+							col: message.Keyframe.cursor[1],
+						},
+						cursor_visible: message.Keyframe.cursor_visible,
+						timestamp: message.Keyframe.timestamp,
+					};
 
-					// Call the store action directly without subscribing
-					useTerminalStore.getState().handleGridUpdate(message);
-					break;
-				case "pty_size":
-					console.log("PTY size update:", message.rows, "x", message.cols);
-					useTerminalStore.getState().updateSize(message.rows, message.cols);
-					break;
-				case "output":
-					// Handle legacy output messages - these are raw terminal output
-					// We can log them for debugging but grid_update is the primary channel
-					console.log("Received raw output:", message.content);
-					break;
-				default:
-					console.log("Unknown message type:", message.type, message);
-			}
-		},
-		[],
-	);
+					useTerminalStore.getState().handleGridUpdate(transformedMessage);
+				} else if ("Diff" in message) {
+					console.log("Grid update diff:", {
+						changeCount: message.Diff.changes.length,
+						cursor: message.Diff.cursor,
+						cursor_visible: message.Diff.cursor_visible,
+					});
+
+					// Transform diff data to match store expectations
+					const transformedMessage = {
+						type: "grid_update",
+						cells: message.Diff.changes,
+						cursor: message.Diff.cursor
+							? {
+									row: message.Diff.cursor[0],
+									col: message.Diff.cursor[1],
+								}
+							: undefined,
+						cursor_visible: message.Diff.cursor_visible,
+						timestamp: message.Diff.timestamp,
+					};
+
+					useTerminalStore.getState().handleGridUpdate(transformedMessage);
+				}
+				break;
+			case "pty_size":
+				console.log("PTY size update:", message.rows, "x", message.cols);
+				useTerminalStore.getState().updateSize(message.rows, message.cols);
+				break;
+			case "output":
+				// Handle legacy output messages - these are raw terminal output
+				console.log(
+					"Received raw output:",
+					message.data,
+					"at",
+					message.timestamp,
+				);
+				break;
+			case "error":
+				console.error("Server error:", message.message);
+				break;
+			default:
+				console.log("Unknown message type:", message);
+		}
+	}, []);
 
 	useEffect(() => {
 		// Connect to WebSocket
@@ -235,6 +270,8 @@ export default function Terminal({ sessionId }: TerminalProps) {
 			console.log("WebSocket connected");
 
 			// Request initial keyframe to get current terminal state
+			// TODO: This message type is not in the generated ClientMessage union
+			// Consider adding it to the Rust backend or removing this functionality
 			ws.send(
 				JSON.stringify({
 					type: "request_keyframe",
@@ -244,7 +281,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
 
 		ws.onmessage = (event) => {
 			try {
-				const message = JSON.parse(event.data);
+				const message = JSON.parse(event.data) as ServerMessage;
 				handleWebSocketMessage(message);
 			} catch (error) {
 				console.error("Failed to parse WebSocket message:", error);
@@ -280,9 +317,10 @@ export default function Terminal({ sessionId }: TerminalProps) {
 
 	const sendKeyEvent = useCallback((keyEvent: WebKeyEvent) => {
 		if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-			const message = {
+			const message: ClientMessage = {
 				type: "key",
-				...keyEvent,
+				code: keyEvent.code,
+				modifiers: keyEvent.modifiers,
 			};
 			wsRef.current.send(JSON.stringify(message));
 		}
@@ -321,7 +359,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
 				meta: event.metaKey || false,
 			};
 
-			let keyCode: string | { Char: string } | { F: number };
+			let keyCode: import("../types/bindings").KeyCode;
 
 			// Map common keys
 			switch (event.key) {

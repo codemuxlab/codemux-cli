@@ -50,14 +50,12 @@ async fn handle_socket(
         &session_id
     };
     let welcome_msg = ServerMessage::Output {
-        data: crate::core::pty_session::PtyOutputMessage {
-            data: format!(
-                "Connected to session {} - Claude Code TUI starting...\r\n",
-                session_short
-            )
-            .into_bytes(),
-            timestamp: std::time::SystemTime::now(),
-        },
+        data: format!(
+            "Connected to session {} - Claude Code TUI starting...\r\n",
+            session_short
+        )
+        .into_bytes(),
+        timestamp: std::time::SystemTime::now(),
     };
     if let Ok(welcome_str) = serde_json::to_string(&welcome_msg) {
         tracing::debug!("WebSocket sending welcome message: {}", welcome_str);
@@ -99,7 +97,7 @@ async fn handle_socket(
     match pty_channels.request_keyframe().await {
         Ok(keyframe) => {
             tracing::debug!("Received keyframe for new WebSocket client");
-            let keyframe_ws_msg = ServerMessage::Grid { data: keyframe };
+            let keyframe_ws_msg = ServerMessage::GridUpdate { update: keyframe };
             if let Ok(keyframe_str) = serde_json::to_string(&keyframe_ws_msg) {
                 // Test that we can deserialize what we're about to send
                 match serde_json::from_str::<ServerMessage>(&keyframe_str) {
@@ -134,7 +132,7 @@ async fn handle_socket(
             grid_update = grid_rx.recv() => {
                 match grid_update {
                     Ok(update) => {
-                        let ws_msg = ServerMessage::Grid { data: update };
+                        let ws_msg = ServerMessage::GridUpdate { update };
                         if let Ok(grid_msg) = serde_json::to_string(&ws_msg) {
                             // Test that we can deserialize what we're about to send
                             match serde_json::from_str::<ServerMessage>(&grid_msg) {
@@ -207,10 +205,18 @@ async fn handle_socket(
                         tracing::debug!("WebSocket received message: {} chars", text.len());
                         if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
                             match client_msg {
-                                ClientMessage::Input { data } => {
-                                    tracing::debug!("WebSocket received input message");
-                                    if pty_input_tx.send(data).is_err() {
-                                        tracing::error!("Failed to send input to PTY");
+                                ClientMessage::Key { code, modifiers } => {
+                                    tracing::debug!("WebSocket received key event: {:?} with modifiers {:?}", code, modifiers);
+                                    // Convert to PtyInputMessage with key event
+                                    let key_event = crate::core::pty_session::KeyEvent { code, modifiers };
+                                    let input_msg = crate::core::pty_session::PtyInputMessage {
+                                        input: crate::core::pty_session::PtyInput::Key {
+                                            event: key_event,
+                                            client_id: "web".to_string(),
+                                        },
+                                    };
+                                    if pty_input_tx.send(input_msg).is_err() {
+                                        tracing::error!("Failed to send key input to PTY");
                                         break;
                                     }
                                 }

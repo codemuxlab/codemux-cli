@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, Mutex};
+use ts_rs::TS;
 
 /// Default PTY dimensions
 pub const DEFAULT_PTY_COLS: u16 = 80;
@@ -25,7 +26,8 @@ pub enum PtyControlMessage {
 }
 
 /// Key event modifiers
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct KeyModifiers {
     pub shift: bool,
     pub ctrl: bool,
@@ -34,7 +36,8 @@ pub struct KeyModifiers {
 }
 
 /// Key codes that can be sent to terminal
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub enum KeyCode {
     /// A character key
     Char(char),
@@ -71,18 +74,17 @@ pub enum KeyCode {
 }
 
 /// Key event structure
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct KeyEvent {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
-/// Input message that can be either raw bytes or key events
+/// Input message for key events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PtyInput {
-    /// Raw byte data (legacy mode)
-    Raw { data: Vec<u8>, client_id: String },
-    /// Key event (preferred mode)
+    /// Key event
     Key { event: KeyEvent, client_id: String },
 }
 
@@ -100,7 +102,8 @@ pub struct PtyOutputMessage {
 }
 
 /// Serializable version of PtySize for grid messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SerializablePtySize {
     pub rows: u16,
     pub cols: u16,
@@ -116,7 +119,8 @@ impl From<PtySize> for SerializablePtySize {
 }
 
 /// Terminal grid cell representation
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct GridCell {
     pub char: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -133,7 +137,8 @@ pub struct GridCell {
     pub reverse: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub enum TerminalColor {
     /// Default terminal color (use theme default)
     Default,
@@ -164,7 +169,8 @@ fn is_false(b: &bool) -> bool {
 }
 
 /// Terminal grid update messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum GridUpdateMessage {
     /// Full terminal state keyframe (sent to new clients)
     Keyframe {
@@ -172,6 +178,7 @@ pub enum GridUpdateMessage {
         cells: Vec<((u16, u16), GridCell)>, // (row, col) -> cell
         cursor: (u16, u16),                 // (row, col)
         cursor_visible: bool,               // whether cursor is visible
+        #[ts(type = "string")]
         timestamp: std::time::SystemTime,
     },
     /// Incremental changes (sent to existing clients)
@@ -179,6 +186,7 @@ pub enum GridUpdateMessage {
         changes: Vec<(u16, u16, GridCell)>, // (row, col, new_cell)
         cursor: Option<(u16, u16)>,         // new cursor position if changed
         cursor_visible: Option<bool>,       // cursor visibility if changed
+        #[ts(type = "string")]
         timestamp: std::time::SystemTime,
     },
 }
@@ -708,16 +716,9 @@ impl PtySession {
         let input_task = tokio::spawn(async move {
             let mut input_rx = input_rx;
             while let Some(msg) = input_rx.recv().await {
-                let bytes = match &msg.input {
-                    PtyInput::Raw { data, .. } => {
-                        tracing::debug!("Processing raw input: {} bytes", data.len());
-                        data.clone()
-                    }
-                    PtyInput::Key { event, .. } => {
-                        tracing::debug!("Processing key event: {:?}", event);
-                        Self::key_event_to_bytes(event)
-                    }
-                };
+                let PtyInput::Key { event, .. } = &msg.input;
+                tracing::debug!("Processing key event: {:?}", event);
+                let bytes = Self::key_event_to_bytes(event);
 
                 let mut writer_guard = input_writer.lock().await;
                 if let Err(e) = writer_guard.write_all(&bytes) {

@@ -395,7 +395,13 @@ impl SessionConnection {
                 tokio::select! {
                     // Handle input from TUI -> WebSocket
                     Some(input_msg) = input_rx.recv() => {
-                        let client_msg = ClientMessage::Input { data: input_msg };
+                        // Handle Key events
+                        let crate::core::pty_session::PtyInput::Key { event, .. } = input_msg.input;
+                        let client_msg = ClientMessage::Key {
+                            code: event.code,
+                            modifiers: event.modifiers
+                        };
+
                         if let Ok(json) = serde_json::to_string(&client_msg) {
                             tracing::debug!("Client WebSocket sending input: {} chars", json.len());
                             if ws_stream.send(Message::Text(json)).await.is_err() {
@@ -436,13 +442,14 @@ impl SessionConnection {
                                 tracing::debug!("Client WebSocket received message: {} chars", text.len());
                                 if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
                                     match server_msg {
-                                        ServerMessage::Output { data } => {
+                                        ServerMessage::Output { data, timestamp } => {
                                             tracing::debug!("Client WebSocket forwarding output to PTY channel");
-                                            let _ = output_tx_clone.send(data);
+                                            let output_msg = crate::core::pty_session::PtyOutputMessage { data, timestamp };
+                                            let _ = output_tx_clone.send(output_msg);
                                         }
-                                        ServerMessage::Grid { data } => {
+                                        ServerMessage::GridUpdate { update } => {
                                             tracing::debug!("Client WebSocket forwarding grid update to PTY channel");
-                                            let _ = grid_tx_clone.send(data);
+                                            let _ = grid_tx_clone.send(update);
                                         }
                                         ServerMessage::PtySize { rows, cols } => {
                                             tracing::debug!("Client WebSocket received PTY size: {}x{}", cols, rows);
@@ -520,8 +527,12 @@ impl SessionConnection {
 
     /// Send PTY input to the session
     pub async fn send_input(&mut self, input: PtyInputMessage) -> Result<()> {
-        self.send_message(ClientMessage::Input { data: input })
-            .await
+        let crate::core::pty_session::PtyInput::Key { event, .. } = input.input;
+        let client_msg = ClientMessage::Key {
+            code: event.code,
+            modifiers: event.modifiers,
+        };
+        self.send_message(client_msg).await
     }
 
     /// Send resize event to the session

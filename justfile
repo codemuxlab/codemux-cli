@@ -46,8 +46,12 @@ clippy:
 fmt:
     cargo fmt
 
+# Generate TypeScript bindings from Rust structs
+ts-bindings:
+    cargo test export_bindings
+
 # Lint React Native app
-app-lint:
+app-lint: ts-bindings
     cd app && npm run lint
 
 # Lint both Rust and React app

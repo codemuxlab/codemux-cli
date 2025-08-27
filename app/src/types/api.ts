@@ -1,3 +1,5 @@
+import type { GridCell } from "./bindings";
+
 // Base types for API responses
 export interface ApiResponse<T = unknown> {
 	success: boolean;
@@ -108,6 +110,13 @@ export interface WebSocketMessage {
 	timestamp?: string;
 }
 
+// Use generated types for WebSocket communication
+export type {
+	ClientMessage,
+	GridUpdateMessage,
+	ServerMessage,
+} from "./bindings";
+
 export interface TerminalMessage extends WebSocketMessage {
 	type: "terminal";
 	data: {
@@ -124,7 +133,7 @@ export interface GitStatusMessage extends WebSocketMessage {
 	};
 }
 
-export interface GridUpdateMessage extends WebSocketMessage {
+export interface LegacyGridUpdateMessage extends WebSocketMessage {
 	type: "grid";
 	data: {
 		sessionId: string;
@@ -133,17 +142,10 @@ export interface GridUpdateMessage extends WebSocketMessage {
 	};
 }
 
-// Terminal grid types
-export interface GridCell {
-	char: string;
-	fg_color?: string;
-	bg_color?: string;
-	bold?: boolean;
-	italic?: boolean;
-	underline?: boolean;
-	reverse?: boolean;
-}
+// Use the generated GridCell type from bindings
+export type { GridCell } from "./bindings";
 
+// Keep CursorPosition for backwards compatibility, but align with generated types
 export interface CursorPosition {
 	row: number;
 	col: number;
