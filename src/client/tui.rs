@@ -222,7 +222,7 @@ impl SessionTui {
                 // Drop diff messages if we haven't received initial keyframe
                 if !self.has_received_keyframe {
                     tracing::debug!("Dropping diff update - no initial keyframe received yet");
-                    return false;
+                    // return false;
                 }
 
                 tracing::debug!("Processing diff: {} changes", changes.len());
