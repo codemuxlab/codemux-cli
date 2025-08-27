@@ -399,27 +399,37 @@ impl SessionTui {
                 return;
             }
         };
-        // Convert crossterm key event to bytes for PTY
-        if let Some(input_bytes) = key_to_bytes(key) {
-            tracing::debug!("Sending to PTY: {:?} (bytes: {:?})", key, input_bytes);
+        // Convert crossterm KeyEvent to our KeyEvent format
+        let key_event = crate::core::pty_session::KeyEvent {
+            code: convert_key_code(key.code),
+            modifiers: crate::core::pty_session::KeyModifiers {
+                shift: key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT),
+                ctrl: key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL),
+                alt: key.modifiers.contains(crossterm::event::KeyModifiers::ALT),
+                meta: key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SUPER),
+            },
+        };
 
-            let input_msg = PtyInputMessage {
-                input: PtyInput::Raw {
-                    data: input_bytes,
-                    client_id: "tui".to_string(),
-                },
-            };
+        let input_msg = PtyInputMessage {
+            input: PtyInput::Key {
+                event: key_event,
+                client_id: "tui".to_string(),
+            },
+        };
 
-            if let Err(e) = channels.input_tx.send(input_msg) {
-                tracing::warn!("Failed to send input to PTY: {}", e);
-            } else {
-                // For debugging: if this is Enter, also log that we sent a line terminator
-                if matches!(key.code, crossterm::event::KeyCode::Enter) {
-                    tracing::debug!("SENT ENTER - line should be processed now");
-                }
-            }
+        if let Err(e) = channels.input_tx.send(input_msg) {
+            tracing::warn!("Failed to send input to PTY: {}", e);
         } else {
-            tracing::debug!("key_to_bytes returned None for key: {:?}", key);
+            // For debugging: if this is Enter, also log that we sent a line terminator
+            if matches!(key.code, crossterm::event::KeyCode::Enter) {
+                tracing::debug!("SENT ENTER - line should be processed now");
+            }
         }
     }
 
@@ -1074,7 +1084,44 @@ fn string_color_to_ratatui(color_str: &str) -> Option<Color> {
     }
 }
 
-// Convert crossterm KeyEvent to bytes for PTY input
+/// Convert crossterm KeyCode to our KeyCode
+fn convert_key_code(code: crossterm::event::KeyCode) -> crate::core::pty_session::KeyCode {
+    use crate::core::pty_session::KeyCode;
+    use crossterm::event::KeyCode as CrosstermKeyCode;
+
+    match code {
+        CrosstermKeyCode::Backspace => KeyCode::Backspace,
+        CrosstermKeyCode::Enter => KeyCode::Enter,
+        CrosstermKeyCode::Left => KeyCode::Left,
+        CrosstermKeyCode::Right => KeyCode::Right,
+        CrosstermKeyCode::Up => KeyCode::Up,
+        CrosstermKeyCode::Down => KeyCode::Down,
+        CrosstermKeyCode::Home => KeyCode::Home,
+        CrosstermKeyCode::End => KeyCode::End,
+        CrosstermKeyCode::PageUp => KeyCode::PageUp,
+        CrosstermKeyCode::PageDown => KeyCode::PageDown,
+        CrosstermKeyCode::Tab => KeyCode::Tab,
+        CrosstermKeyCode::BackTab => KeyCode::Tab, // Map BackTab to Tab, modifiers will handle it
+        CrosstermKeyCode::Delete => KeyCode::Delete,
+        CrosstermKeyCode::Insert => KeyCode::Insert,
+        CrosstermKeyCode::F(n) => KeyCode::F(n),
+        CrosstermKeyCode::Char(c) => KeyCode::Char(c),
+        CrosstermKeyCode::Null => KeyCode::Char('\0'), // Map to null char
+        CrosstermKeyCode::Esc => KeyCode::Esc,
+        // Unsupported keys - map to reasonable alternatives
+        CrosstermKeyCode::CapsLock => KeyCode::Char('\0'),
+        CrosstermKeyCode::ScrollLock => KeyCode::Char('\0'),
+        CrosstermKeyCode::NumLock => KeyCode::Char('\0'),
+        CrosstermKeyCode::PrintScreen => KeyCode::Char('\0'),
+        CrosstermKeyCode::Pause => KeyCode::Char('\0'),
+        CrosstermKeyCode::Menu => KeyCode::Char('\0'),
+        CrosstermKeyCode::KeypadBegin => KeyCode::Char('\0'),
+        CrosstermKeyCode::Media(_) => KeyCode::Char('\0'), // Not supported
+        CrosstermKeyCode::Modifier(_) => KeyCode::Char('\0'), // Not supported
+    }
+}
+
+// Convert crossterm KeyEvent to bytes for PTY input (legacy function - no longer used)
 fn key_to_bytes(key: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::io::Write;
@@ -1089,7 +1136,15 @@ fn key_to_bytes(key: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
             }
         }
         KeyCode::BackTab => Some(b"\x1b[Z".to_vec()), // BackTab (Shift+Tab)
-        KeyCode::Backspace => Some(b"\x7f".to_vec()), // DEL character
+        KeyCode::Backspace => {
+            if key.modifiers.contains(KeyModifiers::ALT) {
+                Some(b"\x1b\x7f".to_vec()) // Alt+Backspace (ESC + DEL)
+            } else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                Some(b"\x15".to_vec()) // Cmd+Backspace (Ctrl+U - delete line)
+            } else {
+                Some(b"\x7f".to_vec()) // Normal Backspace (DEL)
+            }
+        }
         KeyCode::Delete => Some(b"\x1b[3~".to_vec()), // Delete sequence
         KeyCode::Insert => Some(b"\x1b[2~".to_vec()), // Insert
         KeyCode::Left => {

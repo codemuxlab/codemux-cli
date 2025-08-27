@@ -1176,7 +1176,15 @@ impl PtySession {
                 }
             }
             KeyCode::Enter => vec![b'\r'],
-            KeyCode::Backspace => vec![0x7f], // DEL
+            KeyCode::Backspace => {
+                if modifiers.alt {
+                    vec![0x1b, 0x7f] // Alt+Backspace (ESC + DEL)
+                } else if modifiers.ctrl {
+                    vec![0x15] // Cmd+Backspace (Ctrl+U - delete line on macOS)
+                } else {
+                    vec![0x7f] // Normal Backspace (DEL)
+                }
+            }
             KeyCode::Tab => {
                 if modifiers.shift {
                     vec![0x1b, b'[', b'Z'] // Shift+Tab
