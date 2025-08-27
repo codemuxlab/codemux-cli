@@ -18,7 +18,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::assets::embedded::ReactAssets;
-use crate::core::{WebSocketMessage};
+use crate::core::{ClientMessage, ServerMessage};
 use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
 use crate::server::manager::SessionManagerHandle;
 
@@ -115,7 +115,7 @@ async fn handle_socket(
     } else {
         &session_id
     };
-    let welcome_msg = WebSocketMessage::Output {
+    let welcome_msg = ServerMessage::Output {
         data: crate::core::pty_session::PtyOutputMessage {
             data: format!("Connected to session {} - Claude Code TUI starting...\r\n", session_short).into_bytes(),
             timestamp: std::time::SystemTime::now(),
@@ -165,7 +165,7 @@ async fn handle_socket(
     match pty_channels.request_keyframe().await {
         Ok(keyframe) => {
             tracing::debug!("Received keyframe for new WebSocket client");
-            let keyframe_ws_msg = WebSocketMessage::Grid { data: keyframe };
+            let keyframe_ws_msg = ServerMessage::Grid { data: keyframe };
             if let Ok(keyframe_str) = serde_json::to_string(&keyframe_ws_msg) {
                 tracing::debug!("WebSocket sending initial keyframe: {} chars", keyframe_str.len());
                 if socket
@@ -190,7 +190,7 @@ async fn handle_socket(
             grid_update = grid_rx.recv() => {
                 match grid_update {
                     Ok(update) => {
-                        let ws_msg = WebSocketMessage::Grid { data: update };
+                        let ws_msg = ServerMessage::Grid { data: update };
                         if let Ok(grid_msg) = serde_json::to_string(&ws_msg) {
                             tracing::debug!("WebSocket sending grid update: {} chars", grid_msg.len());
                             if socket.send(Message::Text(grid_msg)).await.is_err() {
@@ -232,7 +232,7 @@ async fn handle_socket(
             size_update = size_rx.recv() => {
                 match size_update {
                     Ok(size) => {
-                        let ws_msg = WebSocketMessage::PtySize { rows: size.rows, cols: size.cols };
+                        let ws_msg = ServerMessage::PtySize { rows: size.rows, cols: size.cols };
                         if let Ok(size_msg_str) = serde_json::to_string(&ws_msg) {
                             if socket.send(Message::Text(size_msg_str)).await.is_err() {
                                 break;
@@ -255,26 +255,26 @@ async fn handle_socket(
                 match ws_msg {
                     Some(Ok(Message::Text(text))) => {
                         tracing::debug!("WebSocket received message: {} chars", text.len());
-                        if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(&text) {
-                            match ws_msg {
-                                WebSocketMessage::Input { data } => {
+                        if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
+                            match client_msg {
+                                ClientMessage::Input { data } => {
                                     tracing::debug!("WebSocket received input message");
                                     if pty_input_tx.send(data).is_err() {
                                         tracing::error!("Failed to send input to PTY");
                                         break;
                                     }
                                 }
-                                WebSocketMessage::Resize { rows, cols } => {
+                                ClientMessage::Resize { rows, cols } => {
                                     tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
                                     // Send resize control message to PTY
                                     // TODO: Handle resize if needed
                                 }
-                                WebSocketMessage::RequestKeyframe => {
+                                ClientMessage::RequestKeyframe => {
                                     tracing::debug!("WebSocket received keyframe request");
                                     // Send current keyframe
                                     match pty_channels.request_keyframe().await {
                                         Ok(keyframe) => {
-                                            let keyframe_msg = WebSocketMessage::Grid { data: keyframe };
+                                            let keyframe_msg = ServerMessage::Grid { data: keyframe };
                                             if let Ok(keyframe_str) = serde_json::to_string(&keyframe_msg) {
                                                 if socket.send(Message::Text(keyframe_str)).await.is_err() {
                                                     break;
@@ -285,9 +285,6 @@ async fn handle_socket(
                                             tracing::warn!("Failed to get keyframe on request: {}", e);
                                         }
                                     }
-                                }
-                                _ => {
-                                    tracing::debug!("Received server message type, ignoring");
                                 }
                             }
                         } else {

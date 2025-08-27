@@ -1,19 +1,22 @@
 use serde::{Deserialize, Serialize};
 use super::{PtyInputMessage, PtyOutputMessage, GridUpdateMessage};
 
-/// Unified WebSocket message format for client-server communication
+/// Messages sent from client to server
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum WebSocketMessage {
-    // Client-to-Server messages
+pub enum ClientMessage {
     #[serde(rename = "input")]
     Input { data: PtyInputMessage },
     #[serde(rename = "resize")]
     Resize { rows: u16, cols: u16 },
     #[serde(rename = "request_keyframe")]
     RequestKeyframe,
-    
-    // Server-to-Client messages
+}
+
+/// Messages sent from server to client
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ServerMessage {
     #[serde(rename = "output")]
     Output { data: PtyOutputMessage },
     #[serde(rename = "grid")]

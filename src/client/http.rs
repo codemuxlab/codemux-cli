@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::core::{Config, SessionInfo, ProjectInfo, ProjectWithSessions, WebSocketMessage};
+use crate::core::{Config, SessionInfo, ProjectInfo, ProjectWithSessions, ClientMessage, ServerMessage};
 use crate::core::pty_session::{PtyInputMessage, GridUpdateMessage};
 
 #[derive(Debug, Clone)]
@@ -355,8 +355,8 @@ impl SessionConnection {
                 tokio::select! {
                     // Handle input from TUI -> WebSocket
                     Some(input_msg) = input_rx.recv() => {
-                        let ws_msg = WebSocketMessage::Input { data: input_msg };
-                        if let Ok(json) = serde_json::to_string(&ws_msg) {
+                        let client_msg = ClientMessage::Input { data: input_msg };
+                        if let Ok(json) = serde_json::to_string(&client_msg) {
                             tracing::debug!("Client WebSocket sending input: {} chars", json.len());
                             if ws_stream.send(Message::Text(json)).await.is_err() {
                                 tracing::error!("Failed to send input via client WebSocket");
@@ -369,16 +369,16 @@ impl SessionConnection {
                     Some(control_msg) = control_rx.recv() => {
                         match control_msg {
                             PtyControlMessage::Resize { rows, cols } => {
-                                let ws_msg = WebSocketMessage::Resize { rows, cols };
-                                if let Ok(json) = serde_json::to_string(&ws_msg) {
+                                let client_msg = ClientMessage::Resize { rows, cols };
+                                if let Ok(json) = serde_json::to_string(&client_msg) {
                                     if ws_stream.send(Message::Text(json)).await.is_err() {
                                         break;
                                     }
                                 }
                             }
                             PtyControlMessage::RequestKeyframe { response_tx } => {
-                                let ws_msg = WebSocketMessage::RequestKeyframe;
-                                if let Ok(json) = serde_json::to_string(&ws_msg) {
+                                let client_msg = ClientMessage::RequestKeyframe;
+                                if let Ok(json) = serde_json::to_string(&client_msg) {
                                     if ws_stream.send(Message::Text(json)).await.is_err() {
                                         break;
                                     }
@@ -399,25 +399,22 @@ impl SessionConnection {
                         match msg {
                             Some(Ok(Message::Text(text))) => {
                                 tracing::debug!("Client WebSocket received message: {} chars", text.len());
-                                if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(&text) {
-                                    match ws_msg {
-                                        WebSocketMessage::Output { data } => {
+                                if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
+                                    match server_msg {
+                                        ServerMessage::Output { data } => {
                                             tracing::debug!("Client WebSocket forwarding output to PTY channel");
                                             let _ = output_tx_clone.send(data);
                                         }
-                                        WebSocketMessage::Grid { data } => {
+                                        ServerMessage::Grid { data } => {
                                             tracing::debug!("Client WebSocket forwarding grid update to PTY channel");
                                             let _ = grid_tx_clone.send(data);
                                         }
-                                        WebSocketMessage::PtySize { rows, cols } => {
+                                        ServerMessage::PtySize { rows, cols } => {
                                             tracing::debug!("Client WebSocket received PTY size: {}x{}", cols, rows);
                                             // Forward size update if needed
                                         }
-                                        WebSocketMessage::Error { message } => {
+                                        ServerMessage::Error { message } => {
                                             tracing::error!("Server error: {}", message);
-                                        }
-                                        _ => {
-                                            tracing::debug!("Received client message type, ignoring");
                                         }
                                     }
                                 } else {
@@ -449,7 +446,7 @@ impl SessionConnection {
     }
     
     /// Send a message to the server
-    pub async fn send_message(&mut self, message: WebSocketMessage) -> Result<()> {
+    pub async fn send_message(&mut self, message: ClientMessage) -> Result<()> {
         use futures_util::SinkExt;
         
         let json = serde_json::to_string(&message)?;
@@ -458,13 +455,13 @@ impl SessionConnection {
     }
     
     /// Receive a message from the server
-    pub async fn receive_message(&mut self) -> Result<Option<WebSocketMessage>> {
+    pub async fn receive_message(&mut self) -> Result<Option<ServerMessage>> {
         use futures_util::StreamExt;
         
         loop {
             match self.ws_stream.next().await {
                 Some(Ok(Message::Text(text))) => {
-                    let message: WebSocketMessage = serde_json::from_str(&text)?;
+                    let message: ServerMessage = serde_json::from_str(&text)?;
                     return Ok(Some(message));
                 }
                 Some(Ok(Message::Close(_))) => return Ok(None),
@@ -488,17 +485,17 @@ impl SessionConnection {
     
     /// Send PTY input to the session
     pub async fn send_input(&mut self, input: PtyInputMessage) -> Result<()> {
-        self.send_message(WebSocketMessage::Input { data: input }).await
+        self.send_message(ClientMessage::Input { data: input }).await
     }
     
     /// Send resize event to the session
     pub async fn send_resize(&mut self, rows: u16, cols: u16) -> Result<()> {
-        self.send_message(WebSocketMessage::Resize { rows, cols }).await
+        self.send_message(ClientMessage::Resize { rows, cols }).await
     }
     
     /// Request a keyframe (full terminal state)
     pub async fn request_keyframe(&mut self) -> Result<()> {
-        self.send_message(WebSocketMessage::RequestKeyframe).await
+        self.send_message(ClientMessage::RequestKeyframe).await
     }
     
     /// Close the connection
