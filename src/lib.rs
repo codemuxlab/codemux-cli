@@ -1,18 +1,18 @@
 // CodeMux Library
 // Terminal multiplexer for AI coding CLIs with server-client architecture
 
-pub mod cli;
-pub mod server;
-pub mod client;
-pub mod core;
-pub mod utils;
 pub mod assets;
 pub mod capture;
+pub mod cli;
+pub mod client;
+pub mod core;
+pub mod server;
+pub mod utils;
 
 // Re-export commonly used types
-pub use core::{Config, SessionInfo, ProjectInfo, ProjectWithSessions};
 pub use client::http::CodeMuxClient;
+pub use core::{Config, ProjectInfo, ProjectWithSessions, SessionInfo};
 pub use server::SessionManagerHandle;
 
 // Error handling
-pub use anyhow::{Result, Error};
+pub use anyhow::{Error, Result};

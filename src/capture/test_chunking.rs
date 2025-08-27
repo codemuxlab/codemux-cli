@@ -412,8 +412,6 @@ fn split_by_escape_sequences(raw_data_sequence: &[Vec<u8>]) -> Vec<Vec<u8>> {
     result
 }
 
-
-
 /// Load raw data sequence from a JSONL file for testing
 pub fn load_test_data_from_jsonl(jsonl_path: &str) -> Result<Vec<Vec<u8>>> {
     use crate::capture::session_data::SessionEvent;

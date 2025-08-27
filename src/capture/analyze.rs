@@ -203,9 +203,7 @@ pub async fn analyze_jsonl_data(input_path: &Path, verbose: bool) -> Result<()> 
 
 type CursorDifference = (u32, (u16, u16), (u16, u16), Vec<u8>);
 
-async fn analyze_timing_patterns(
-    cursor_differences: &[CursorDifference],
-) -> Result<()> {
+async fn analyze_timing_patterns(cursor_differences: &[CursorDifference]) -> Result<()> {
     println!("\n🕒 Timing Analysis & Smart Chunking Suggestions:");
 
     if cursor_differences.is_empty() {

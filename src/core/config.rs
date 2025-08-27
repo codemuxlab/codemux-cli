@@ -58,23 +58,23 @@ impl Config {
             let config_file = config_dir.config_dir().join("config.toml");
             if config_file.exists() {
                 let content = std::fs::read_to_string(&config_file)?;
-                
+
                 // Try to load as new format first
                 if let Ok(config) = toml::from_str::<Config>(&content) {
                     return Ok(config);
                 }
-                
+
                 // Try to load legacy format and migrate
                 if let Ok(legacy_config) = toml::from_str::<LegacyConfig>(&content) {
                     let migrated_config = Config::from_legacy(legacy_config);
-                    
+
                     // Save the migrated config
                     if let Err(e) = migrated_config.save() {
                         tracing::warn!("Failed to save migrated config: {}", e);
                     } else {
                         tracing::info!("Migrated legacy daemon config to server config");
                     }
-                    
+
                     return Ok(migrated_config);
                 }
             }
@@ -91,14 +91,17 @@ impl Config {
         }
         Ok(())
     }
-    
+
     fn from_legacy(legacy: LegacyConfig) -> Self {
         Config {
             whitelist: legacy.whitelist,
             server: ServerConfig {
                 port: legacy.daemon.port,
                 data_dir: legacy.daemon.data_dir,
-                pid_file: legacy.daemon.pid_file.parent()
+                pid_file: legacy
+                    .daemon
+                    .pid_file
+                    .parent()
                     .map(|p| p.join("server.pid"))
                     .unwrap_or_else(|| PathBuf::from("server.pid")),
             },

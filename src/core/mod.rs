@@ -1,9 +1,12 @@
 pub mod config;
-pub mod session;
 pub mod pty_session;
+pub mod session;
 pub mod websocket;
 
 pub use config::Config;
-pub use session::{SessionInfo, ProjectInfo, ProjectWithSessions};
-pub use pty_session::{PtySession, PtyChannels, PtyInputMessage, PtyOutputMessage, PtyControlMessage, GridUpdateMessage};
+pub use pty_session::{
+    GridUpdateMessage, PtyChannels, PtyControlMessage, PtyInputMessage, PtyOutputMessage,
+    PtySession,
+};
+pub use session::{ProjectInfo, ProjectWithSessions, SessionInfo};
 pub use websocket::{ClientMessage, ServerMessage};

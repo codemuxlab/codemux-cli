@@ -205,17 +205,21 @@ impl PtyChannels {
         self.control_tx
             .send(PtyControlMessage::RequestKeyframe { response_tx: tx })
             .map_err(|e| {
-                tracing::error!("PtyChannels::request_keyframe - Failed to send control message: {}", e);
+                tracing::error!(
+                    "PtyChannels::request_keyframe - Failed to send control message: {}",
+                    e
+                );
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
 
         tracing::debug!("PtyChannels::request_keyframe - Waiting for response");
-        let keyframe = rx
-            .await
-            .map_err(|e| {
-                tracing::error!("PtyChannels::request_keyframe - Failed to receive response: {}", e);
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
+        let keyframe = rx.await.map_err(|e| {
+            tracing::error!(
+                "PtyChannels::request_keyframe - Failed to receive response: {}",
+                e
+            );
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?;
 
         tracing::debug!("PtyChannels::request_keyframe - Received keyframe successfully");
         Ok(keyframe)
@@ -736,7 +740,10 @@ impl PtySession {
             tracing::info!("PTY Control task - Starting control message loop");
             let mut control_rx = control_rx;
             while let Some(msg) = control_rx.recv().await {
-                tracing::debug!("PTY Control task - Received control message: {:?}", std::mem::discriminant(&msg));
+                tracing::debug!(
+                    "PTY Control task - Received control message: {:?}",
+                    std::mem::discriminant(&msg)
+                );
                 match msg {
                     PtyControlMessage::Resize { rows, cols } => {
                         tracing::debug!("Processing resize request to {}x{}", cols, rows);

@@ -13,7 +13,7 @@ pub enum LogLevel {
 
 impl std::str::FromStr for LogLevel {
     type Err = ();
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "ERROR" => Ok(LogLevel::Error),

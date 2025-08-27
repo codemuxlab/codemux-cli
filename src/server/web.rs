@@ -18,8 +18,8 @@ use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::assets::embedded::ReactAssets;
-use crate::core::{ClientMessage, ServerMessage};
 use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
+use crate::core::{ClientMessage, ServerMessage};
 use crate::server::manager::SessionManagerHandle;
 
 #[derive(Clone)]
@@ -27,10 +27,7 @@ pub struct AppState {
     pub session_manager: SessionManagerHandle,
 }
 
-pub async fn start_web_server(
-    port: u16,
-    session_manager: SessionManagerHandle,
-) -> Result<()> {
+pub async fn start_web_server(port: u16, session_manager: SessionManagerHandle) -> Result<()> {
     let state = AppState { session_manager };
 
     let app = Router::new()
@@ -50,13 +47,12 @@ pub async fn start_web_server(
         .route("/_expo/static/*path", get(static_handler))
         .route("/*path", get(react_spa_handler))
         .layer(
-            ServiceBuilder::new()
-                .layer(
-                    CorsLayer::new()
-                        .allow_origin(Any)
-                        .allow_methods(Any)
-                        .allow_headers(Any)
-                )
+            ServiceBuilder::new().layer(
+                CorsLayer::new()
+                    .allow_origin(Any)
+                    .allow_methods(Any)
+                    .allow_headers(Any),
+            ),
         )
         .with_state(state);
 
@@ -98,7 +94,11 @@ async fn handle_socket(
 
     // Get PTY channels from session manager
     tracing::debug!("WebSocket requesting channels for session: {}", session_id);
-    let pty_channels = if let Some(channels) = state.session_manager.get_session_channels(&session_id).await {
+    let pty_channels = if let Some(channels) = state
+        .session_manager
+        .get_session_channels(&session_id)
+        .await
+    {
         tracing::debug!("WebSocket found channels for session: {}", session_id);
         channels
     } else {
@@ -117,18 +117,18 @@ async fn handle_socket(
     };
     let welcome_msg = ServerMessage::Output {
         data: crate::core::pty_session::PtyOutputMessage {
-            data: format!("Connected to session {} - Claude Code TUI starting...\r\n", session_short).into_bytes(),
+            data: format!(
+                "Connected to session {} - Claude Code TUI starting...\r\n",
+                session_short
+            )
+            .into_bytes(),
             timestamp: std::time::SystemTime::now(),
-        }
+        },
     };
 
     if let Ok(welcome_str) = serde_json::to_string(&welcome_msg) {
         tracing::debug!("WebSocket sending welcome message: {}", welcome_str);
-        if socket
-            .send(Message::Text(welcome_str))
-            .await
-            .is_err()
-        {
+        if socket.send(Message::Text(welcome_str)).await.is_err() {
             tracing::error!("Failed to send welcome message via WebSocket");
             return;
         }
@@ -179,11 +179,7 @@ async fn handle_socket(
                         tracing::error!("Message content: {}", keyframe_str);
                     }
                 }
-                if socket
-                    .send(Message::Text(keyframe_str))
-                    .await
-                    .is_err()
-                {
+                if socket.send(Message::Text(keyframe_str)).await.is_err() {
                     tracing::error!("Failed to send initial keyframe to new WebSocket client");
                     return;
                 }
@@ -333,7 +329,6 @@ async fn handle_socket(
     tracing::info!("WebSocket connection closed for session: {}", session_id);
 }
 
-
 #[derive(Deserialize)]
 struct CreateSessionRequest {
     agent: String,
@@ -346,15 +341,20 @@ async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionInfo>, String> {
-    tracing::debug!("Creating session with agent: {}, args: {:?}", req.agent, req.args);
-    match state.session_manager
+    tracing::debug!(
+        "Creating session with agent: {}, args: {:?}",
+        req.agent,
+        req.args
+    );
+    match state
+        .session_manager
         .create_session_with_path(req.agent, req.args, req.project_id, req.path)
         .await
     {
         Ok(info) => {
             tracing::info!("Session created successfully: {}", info.id);
             Ok(Json(info))
-        },
+        }
         Err(e) => {
             tracing::error!("Failed to create session: {}", e);
             Err(e.to_string())
@@ -366,7 +366,8 @@ async fn get_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<SessionInfo>, String> {
-    state.session_manager
+    state
+        .session_manager
         .get_session(&id)
         .await
         .map(Json)
@@ -377,7 +378,8 @@ async fn delete_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<String, String> {
-    state.session_manager
+    state
+        .session_manager
         .close_session(&id)
         .await
         .map(|_| "Session closed".to_string())
@@ -485,21 +487,25 @@ async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectWithSes
     // Return actual projects with their sessions
     let projects = state.session_manager.list_projects().await;
     let sessions = state.session_manager.list_sessions().await;
-    
-    let projects_with_sessions = projects.into_iter().map(|project| {
-        let project_sessions = sessions.iter()
-            .filter(|session| session.project.as_deref() == Some(&project.id))
-            .cloned()
-            .collect();
-            
-        ProjectWithSessions {
-            id: project.id,
-            name: project.name,
-            path: project.path,
-            sessions: project_sessions,
-        }
-    }).collect();
-    
+
+    let projects_with_sessions = projects
+        .into_iter()
+        .map(|project| {
+            let project_sessions = sessions
+                .iter()
+                .filter(|session| session.project.as_deref() == Some(&project.id))
+                .cloned()
+                .collect();
+
+            ProjectWithSessions {
+                id: project.id,
+                name: project.name,
+                path: project.path,
+                sessions: project_sessions,
+            }
+        })
+        .collect();
+
     Json(projects_with_sessions)
 }
 
@@ -513,7 +519,11 @@ async fn add_project(
     State(state): State<AppState>,
     Json(req): Json<AddProjectRequest>,
 ) -> Result<Json<ProjectInfo>, String> {
-    match state.session_manager.create_project(req.name, req.path).await {
+    match state
+        .session_manager
+        .create_project(req.name, req.path)
+        .await
+    {
         Ok(info) => Ok(Json(info)),
         Err(e) => Err(e.to_string()),
     }
@@ -589,13 +599,18 @@ struct GitFileDiff {
 }
 
 // Git API handlers
-async fn get_git_status(Path(session_id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
+async fn get_git_status(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let working_dir = match get_session_working_dir(&session_id, &state).await {
         Some(dir) => dir,
-        None => return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Session not found"))
-            .unwrap(),
+        None => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Session not found"))
+                .unwrap()
+        }
     };
 
     match execute_git_status(&working_dir).await {
@@ -607,13 +622,18 @@ async fn get_git_status(Path(session_id): Path<String>, State(state): State<AppS
     }
 }
 
-async fn get_git_diff(Path(session_id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
+async fn get_git_diff(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let working_dir = match get_session_working_dir(&session_id, &state).await {
         Some(dir) => dir,
-        None => return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Session not found"))
-            .unwrap(),
+        None => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Session not found"))
+                .unwrap()
+        }
     };
 
     match execute_git_diff(&working_dir).await {
@@ -625,13 +645,18 @@ async fn get_git_diff(Path(session_id): Path<String>, State(state): State<AppSta
     }
 }
 
-async fn get_git_file_diff(Path((session_id, file_path)): Path<(String, String)>, State(state): State<AppState>) -> impl IntoResponse {
+async fn get_git_file_diff(
+    Path((session_id, file_path)): Path<(String, String)>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     let working_dir = match get_session_working_dir(&session_id, &state).await {
         Some(dir) => dir,
-        None => return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Body::from("Session not found"))
-            .unwrap(),
+        None => {
+            return Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("Session not found"))
+                .unwrap()
+        }
     };
 
     match execute_git_file_diff(&working_dir, &file_path).await {
@@ -657,7 +682,9 @@ async fn get_session_working_dir(session_id: &str, state: &AppState) -> Option<S
     Some(std::env::current_dir().ok()?.to_string_lossy().to_string())
 }
 
-async fn execute_git_status(working_dir: &str) -> Result<GitStatus, Box<dyn std::error::Error + Send + Sync>> {
+async fn execute_git_status(
+    working_dir: &str,
+) -> Result<GitStatus, Box<dyn std::error::Error + Send + Sync>> {
     let output = Command::new("git")
         .args(["status", "--porcelain", "-b", "--untracked-files=all"])
         .current_dir(working_dir)
@@ -675,11 +702,17 @@ async fn execute_git_status(working_dir: &str) -> Result<GitStatus, Box<dyn std:
         if line.starts_with("##") {
             // Branch information
             let branch_info = line.strip_prefix("## ").unwrap_or("");
-            branch = Some(branch_info.split("...").next().unwrap_or(branch_info).to_string());
+            branch = Some(
+                branch_info
+                    .split("...")
+                    .next()
+                    .unwrap_or(branch_info)
+                    .to_string(),
+            );
         } else if line.len() >= 3 {
             let status_chars = &line[0..2];
             let file_path = line[3..].to_string();
-            
+
             let status = match status_chars {
                 " M" | "M " | "MM" => "modified",
                 "A " | "AM" => "added",
@@ -706,7 +739,9 @@ async fn execute_git_status(working_dir: &str) -> Result<GitStatus, Box<dyn std:
     })
 }
 
-async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::error::Error + Send + Sync>> {
+async fn execute_git_diff(
+    working_dir: &str,
+) -> Result<GitDiff, Box<dyn std::error::Error + Send + Sync>> {
     let mut files = Vec::new();
 
     // Get tracked file changes
@@ -725,7 +760,7 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
         if let Some((status_char, file_path)) = line.split_once('\t') {
             let status = match status_char {
                 "M" => "modified",
-                "A" => "added", 
+                "A" => "added",
                 "D" => "deleted",
                 "R" => "renamed",
                 _ => "unknown",
@@ -738,7 +773,7 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
                 .output()?;
 
             let diff_content = String::from_utf8_lossy(&diff_output.stdout).to_string();
-            
+
             // Parse additions/deletions from diff
             let (additions, deletions) = parse_diff_stats(&diff_content);
 
@@ -761,15 +796,15 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
 
     if untracked_output.status.success() {
         let untracked_str = String::from_utf8_lossy(&untracked_output.stdout);
-        
+
         for line in untracked_str.lines() {
             if line.starts_with("??") && line.len() >= 3 {
                 let file_path = &line[3..];
-                
+
                 // Read the full content of the untracked file
-                let file_content = std::fs::read_to_string(
-                    std::path::Path::new(working_dir).join(file_path)
-                ).unwrap_or_else(|_| String::from("Binary file or read error"));
+                let file_content =
+                    std::fs::read_to_string(std::path::Path::new(working_dir).join(file_path))
+                        .unwrap_or_else(|_| String::from("Binary file or read error"));
 
                 // Create a fake diff showing the entire file as added
                 let fake_diff = if file_content.is_empty() {
@@ -782,12 +817,12 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
                         "--- /dev/null".to_string(),
                         format!("+++ b/{}", file_path),
                     ];
-                    
+
                     // Add each line of the file as an addition
                     for line in file_content.lines() {
                         diff_lines.push(format!("+{}", line));
                     }
-                    
+
                     diff_lines.join("\n")
                 };
 
@@ -808,7 +843,10 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
     Ok(GitDiff { files })
 }
 
-async fn execute_git_file_diff(working_dir: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+async fn execute_git_file_diff(
+    working_dir: &str,
+    file_path: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let output = Command::new("git")
         .args(["diff", file_path])
         .current_dir(working_dir)
@@ -831,9 +869,9 @@ async fn execute_git_file_diff(working_dir: &str, file_path: &str) -> Result<Str
         let status_str = String::from_utf8_lossy(&status_output.stdout);
         if status_str.starts_with("??") {
             // It's an untracked file, show full content as additions
-            let file_content = std::fs::read_to_string(
-                std::path::Path::new(working_dir).join(file_path)
-            ).unwrap_or_else(|_| String::from("Binary file or read error"));
+            let file_content =
+                std::fs::read_to_string(std::path::Path::new(working_dir).join(file_path))
+                    .unwrap_or_else(|_| String::from("Binary file or read error"));
 
             let fake_diff = if file_content.is_empty() {
                 format!("diff --git a/{} b/{}\nnew file mode 100644\nindex 0000000..0000000\n--- /dev/null\n+++ b/{}\n", file_path, file_path, file_path)
@@ -845,12 +883,12 @@ async fn execute_git_file_diff(working_dir: &str, file_path: &str) -> Result<Str
                     "--- /dev/null".to_string(),
                     format!("+++ b/{}", file_path),
                 ];
-                
+
                 // Add each line of the file as an addition
                 for line in file_content.lines() {
                     diff_lines.push(format!("+{}", line));
                 }
-                
+
                 diff_lines.join("\n")
             };
 
@@ -878,11 +916,11 @@ fn parse_diff_stats(diff_content: &str) -> (u32, u32) {
 
 async fn shutdown_server(State(state): State<AppState>) -> impl IntoResponse {
     tracing::info!("Received shutdown request");
-    
+
     // Gracefully shutdown all sessions
     tracing::info!("Shutting down all sessions...");
     state.session_manager.shutdown_all_sessions().await;
-    
+
     // Spawn a task to exit the process after a short delay
     // This allows the HTTP response to be sent before the server shuts down
     tokio::spawn(async {
@@ -890,6 +928,6 @@ async fn shutdown_server(State(state): State<AppState>) -> impl IntoResponse {
         tracing::info!("Exiting server process");
         std::process::exit(0);
     });
-    
+
     Json(serde_json::json!({"status": "shutdown initiated"})).into_response()
 }

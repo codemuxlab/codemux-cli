@@ -4,7 +4,11 @@ use std::path::PathBuf;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::core::{Config, session::{SessionInfo, ProjectInfo}, pty_session::{PtyChannels, PtySession}};
+use crate::core::{
+    pty_session::{PtyChannels, PtySession},
+    session::{ProjectInfo, SessionInfo},
+    Config,
+};
 
 // Commands that can be sent to the SessionManager actor
 pub enum SessionCommand {
@@ -73,20 +77,20 @@ struct Project {
 impl SessionManagerHandle {
     pub fn new(config: Config) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
-        
+
         let actor = SessionManagerActor {
             config,
             sessions: HashMap::new(),
             projects: HashMap::new(),
             command_rx,
         };
-        
+
         // Spawn the actor task
         tokio::spawn(actor.run());
-        
+
         Self { command_tx }
     }
-    
+
     pub async fn create_session_with_path(
         &self,
         agent: String,
@@ -95,7 +99,7 @@ impl SessionManagerHandle {
         path: Option<String>,
     ) -> Result<SessionInfo> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::CreateSession {
             agent,
             args,
@@ -103,104 +107,110 @@ impl SessionManagerHandle {
             path,
             response_tx,
         };
-        
-        self.command_tx.send(command)
+
+        self.command_tx
+            .send(command)
             .map_err(|_| anyhow!("SessionManager actor is not running"))?;
-            
-        response_rx.await
+
+        response_rx
+            .await
             .map_err(|_| anyhow!("SessionManager actor did not respond"))?
     }
-    
+
     pub async fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::GetSession {
             session_id: session_id.to_string(),
             response_tx,
         };
-        
+
         if self.command_tx.send(command).is_err() {
             return None;
         }
-        
+
         response_rx.await.unwrap_or(None)
     }
-    
+
     pub async fn get_session_channels(&self, session_id: &str) -> Option<PtyChannels> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::GetSessionChannels {
             session_id: session_id.to_string(),
             response_tx,
         };
-        
+
         if self.command_tx.send(command).is_err() {
             return None;
         }
-        
+
         response_rx.await.unwrap_or(None)
     }
-    
+
     pub async fn list_sessions(&self) -> Vec<SessionInfo> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::ListSessions { response_tx };
-        
+
         if self.command_tx.send(command).is_err() {
             return vec![];
         }
-        
+
         response_rx.await.unwrap_or_else(|_| vec![])
     }
-    
+
     pub async fn close_session(&self, session_id: &str) -> Result<()> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::CloseSession {
             session_id: session_id.to_string(),
             response_tx,
         };
-        
-        self.command_tx.send(command)
+
+        self.command_tx
+            .send(command)
             .map_err(|_| anyhow!("SessionManager actor is not running"))?;
-            
-        response_rx.await
+
+        response_rx
+            .await
             .map_err(|_| anyhow!("SessionManager actor did not respond"))?
     }
-    
+
     pub async fn create_project(&self, name: String, path: String) -> Result<ProjectInfo> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::CreateProject {
             name,
             path,
             response_tx,
         };
-        
-        self.command_tx.send(command)
+
+        self.command_tx
+            .send(command)
             .map_err(|_| anyhow!("SessionManager actor is not running"))?;
-            
-        response_rx.await
+
+        response_rx
+            .await
             .map_err(|_| anyhow!("SessionManager actor did not respond"))?
     }
-    
+
     pub async fn list_projects(&self) -> Vec<ProjectInfo> {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::ListProjects { response_tx };
-        
+
         if self.command_tx.send(command).is_err() {
             return vec![];
         }
-        
+
         response_rx.await.unwrap_or_else(|_| vec![])
     }
-    
+
     pub async fn shutdown_all_sessions(&self) {
         let (response_tx, response_rx) = oneshot::channel();
-        
+
         let command = SessionCommand::ShutdownAllSessions { response_tx };
-        
+
         if self.command_tx.send(command).is_ok() {
             let _ = response_rx.await;
         }
@@ -213,18 +223,32 @@ impl SessionManagerActor {
             self.handle_command(command).await;
         }
     }
-    
+
     async fn handle_command(&mut self, command: SessionCommand) {
         match command {
-            SessionCommand::CreateSession { agent, args, project_id, path, response_tx } => {
-                let result = self.create_session_with_path(agent, args, project_id, path).await;
+            SessionCommand::CreateSession {
+                agent,
+                args,
+                project_id,
+                path,
+                response_tx,
+            } => {
+                let result = self
+                    .create_session_with_path(agent, args, project_id, path)
+                    .await;
                 let _ = response_tx.send(result);
             }
-            SessionCommand::GetSession { session_id, response_tx } => {
+            SessionCommand::GetSession {
+                session_id,
+                response_tx,
+            } => {
                 let result = self.get_session(&session_id);
                 let _ = response_tx.send(result);
             }
-            SessionCommand::GetSessionChannels { session_id, response_tx } => {
+            SessionCommand::GetSessionChannels {
+                session_id,
+                response_tx,
+            } => {
                 let result = self.get_session_channels(&session_id);
                 let _ = response_tx.send(result);
             }
@@ -232,11 +256,18 @@ impl SessionManagerActor {
                 let result = self.list_sessions();
                 let _ = response_tx.send(result);
             }
-            SessionCommand::CloseSession { session_id, response_tx } => {
+            SessionCommand::CloseSession {
+                session_id,
+                response_tx,
+            } => {
                 let result = self.close_session(&session_id).await;
                 let _ = response_tx.send(result);
             }
-            SessionCommand::CreateProject { name, path, response_tx } => {
+            SessionCommand::CreateProject {
+                name,
+                path,
+                response_tx,
+            } => {
                 let result = self.create_project(name, path);
                 let _ = response_tx.send(result);
             }
@@ -250,7 +281,7 @@ impl SessionManagerActor {
             }
         }
     }
-    
+
     async fn create_session_with_path(
         &mut self,
         agent: String,
@@ -287,7 +318,7 @@ impl SessionManagerActor {
                     break;
                 }
             }
-            
+
             if let Some(existing_id) = found_project_id {
                 // Found existing project
                 std::env::set_current_dir(&current_path)?;
@@ -295,11 +326,12 @@ impl SessionManagerActor {
             } else {
                 // Create temporary project for this path
                 let path_buf = std::path::PathBuf::from(&current_path);
-                let project_name = path_buf.file_name()
+                let project_name = path_buf
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("Unknown")
                     .to_string();
-                
+
                 let temp_project_id = Uuid::new_v4().to_string();
                 self.projects.insert(
                     temp_project_id.clone(),
@@ -309,7 +341,7 @@ impl SessionManagerActor {
                         path: path_buf.clone(),
                     },
                 );
-                
+
                 std::env::set_current_dir(&current_path)?;
                 Some(temp_project_id)
             }
@@ -318,23 +350,39 @@ impl SessionManagerActor {
             None
         };
 
-        tracing::debug!("SessionManager - Creating PTY session with ID: {}, agent: {}", session_id, agent);
+        tracing::debug!(
+            "SessionManager - Creating PTY session with ID: {}, agent: {}",
+            session_id,
+            agent
+        );
         let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args)?;
-        tracing::debug!("SessionManager - PTY session created, channels available, spawning start task");
-        
+        tracing::debug!(
+            "SessionManager - PTY session created, channels available, spawning start task"
+        );
+
         // Clone channels for storage
         let channels_clone = channels.clone();
-        
+
         // Spawn the PTY session start task to actually begin reading from the PTY
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
-            tracing::info!("SessionManager - Starting PTY session tasks for {}", session_id_clone);
+            tracing::info!(
+                "SessionManager - Starting PTY session tasks for {}",
+                session_id_clone
+            );
             if let Err(e) = session.start().await {
-                tracing::error!("SessionManager - PTY session {} failed: {}", session_id_clone, e);
+                tracing::error!(
+                    "SessionManager - PTY session {} failed: {}",
+                    session_id_clone,
+                    e
+                );
             }
-            tracing::info!("SessionManager - PTY session {} completed", session_id_clone);
+            tracing::info!(
+                "SessionManager - PTY session {} completed",
+                session_id_clone
+            );
         });
-        
+
         // Store the session state
         let session_state = SessionState {
             id: session_id.clone(),
@@ -343,7 +391,10 @@ impl SessionManagerActor {
             project_id: resolved_project_id.clone(),
         };
         self.sessions.insert(session_id.clone(), session_state);
-        tracing::info!("SessionManager - Session {} stored successfully, channels ready for use", session_id);
+        tracing::info!(
+            "SessionManager - Session {} stored successfully, channels ready for use",
+            session_id
+        );
 
         Ok(SessionInfo {
             id: session_id,
@@ -352,7 +403,7 @@ impl SessionManagerActor {
             status: "running".to_string(),
         })
     }
-    
+
     fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         self.sessions.get(session_id).map(|state| SessionInfo {
             id: state.id.clone(),
@@ -361,42 +412,66 @@ impl SessionManagerActor {
             status: "running".to_string(),
         })
     }
-    
+
     fn get_session_channels(&self, session_id: &str) -> Option<PtyChannels> {
-        tracing::debug!("SessionManager - Looking for session channels: {}, total sessions: {}", session_id, self.sessions.len());
-        let result = self.sessions.get(session_id).map(|state| state.channels.clone());
+        tracing::debug!(
+            "SessionManager - Looking for session channels: {}, total sessions: {}",
+            session_id,
+            self.sessions.len()
+        );
+        let result = self
+            .sessions
+            .get(session_id)
+            .map(|state| state.channels.clone());
         if result.is_some() {
-            tracing::debug!("SessionManager - Found channels for session: {}", session_id);
+            tracing::debug!(
+                "SessionManager - Found channels for session: {}",
+                session_id
+            );
         } else {
-            tracing::warn!("SessionManager - No channels found for session: {}", session_id);
+            tracing::warn!(
+                "SessionManager - No channels found for session: {}",
+                session_id
+            );
             // Log all available session IDs for debugging
             let session_ids: Vec<_> = self.sessions.keys().collect();
             tracing::debug!("SessionManager - Available session IDs: {:?}", session_ids);
         }
         result
     }
-    
+
     fn list_sessions(&self) -> Vec<SessionInfo> {
-        self.sessions.iter().map(|(_, state)| SessionInfo {
-            id: state.id.clone(),
-            agent: state.agent.clone(),
-            project: state.project_id.clone(),
-            status: "running".to_string(),
-        }).collect()
+        self.sessions
+            .iter()
+            .map(|(_, state)| SessionInfo {
+                id: state.id.clone(),
+                agent: state.agent.clone(),
+                project: state.project_id.clone(),
+                status: "running".to_string(),
+            })
+            .collect()
     }
-    
+
     async fn close_session(&mut self, session_id: &str) -> Result<()> {
         if let Some(state) = self.sessions.remove(session_id) {
             // Send terminate signal
-            if let Err(e) = state.channels.control_tx.send(crate::core::pty_session::PtyControlMessage::Terminate) {
-                tracing::warn!("Failed to send terminate signal to session {}: {}", session_id, e);
+            if let Err(e) = state
+                .channels
+                .control_tx
+                .send(crate::core::pty_session::PtyControlMessage::Terminate)
+            {
+                tracing::warn!(
+                    "Failed to send terminate signal to session {}: {}",
+                    session_id,
+                    e
+                );
             }
             Ok(())
         } else {
             Err(anyhow!("Session not found"))
         }
     }
-    
+
     fn create_project(&mut self, name: String, path: String) -> Result<ProjectInfo> {
         let project_id = Uuid::new_v4().to_string();
         let project_path = std::path::PathBuf::from(&path);
@@ -420,7 +495,7 @@ impl SessionManagerActor {
             path: project_path.to_string_lossy().to_string(),
         })
     }
-    
+
     fn list_projects(&self) -> Vec<ProjectInfo> {
         self.projects
             .values()
@@ -431,20 +506,28 @@ impl SessionManagerActor {
             })
             .collect()
     }
-    
+
     async fn shutdown_all_sessions(&mut self) {
         tracing::info!("Shutting down {} sessions", self.sessions.len());
-        
+
         // Send terminate signal to all sessions
         for (session_id, state) in &self.sessions {
             tracing::info!("Terminating session: {}", session_id);
-            
+
             // Send terminate control message
-            if let Err(e) = state.channels.control_tx.send(crate::core::pty_session::PtyControlMessage::Terminate) {
-                tracing::warn!("Failed to send terminate signal to session {}: {}", session_id, e);
+            if let Err(e) = state
+                .channels
+                .control_tx
+                .send(crate::core::pty_session::PtyControlMessage::Terminate)
+            {
+                tracing::warn!(
+                    "Failed to send terminate signal to session {}: {}",
+                    session_id,
+                    e
+                );
             }
         }
-        
+
         // Clear the sessions map
         self.sessions.clear();
         tracing::info!("All sessions terminated");
