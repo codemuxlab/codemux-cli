@@ -442,8 +442,8 @@ impl SessionManagerActor {
 
     fn list_sessions(&self) -> Vec<SessionInfo> {
         self.sessions
-            .iter()
-            .map(|(_, state)| SessionInfo {
+            .values()
+            .map(|state| SessionInfo {
                 id: state.id.clone(),
                 agent: state.agent.clone(),
                 project: state.project_id.clone(),

@@ -49,35 +49,32 @@ fn find_most_recent_jsonl() -> Result<Option<String>> {
 
         // Look for JSONL files in this project directory
         if let Ok(entries) = fs::read_dir(&project_path) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let file_path = entry.path();
-                    if let Some(extension) = file_path.extension() {
-                        if extension == "jsonl" {
-                            if let Ok(metadata) = entry.metadata() {
-                                if let Ok(modified) = metadata.modified() {
-                                    let session_id = file_path
-                                        .file_stem()
-                                        .and_then(|s| s.to_str())
-                                        .unwrap_or("unknown")
-                                        .to_string();
+            for entry in entries.flatten() {
+                let file_path = entry.path();
+                if let Some(extension) = file_path.extension() {
+                    if extension == "jsonl" {
+                        if let Ok(metadata) = entry.metadata() {
+                            if let Ok(modified) = metadata.modified() {
+                                let session_id = file_path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
 
-                                    tracing::debug!(
-                                        "Found JSONL file: {:?}, session_id: {}, modified: {:?}",
-                                        file_path,
-                                        session_id,
-                                        modified
-                                    );
+                                tracing::debug!(
+                                    "Found JSONL file: {:?}, session_id: {}, modified: {:?}",
+                                    file_path,
+                                    session_id,
+                                    modified
+                                );
 
-                                    match &most_recent {
-                                        None => {
+                                match &most_recent {
+                                    None => {
+                                        most_recent = Some((modified, session_id, file_path));
+                                    }
+                                    Some((prev_time, _, _)) => {
+                                        if modified > *prev_time {
                                             most_recent = Some((modified, session_id, file_path));
-                                        }
-                                        Some((prev_time, _, _)) => {
-                                            if modified > *prev_time {
-                                                most_recent =
-                                                    Some((modified, session_id, file_path));
-                                            }
                                         }
                                     }
                                 }
@@ -149,7 +146,7 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to get current executable path: {}", e))?;
 
         let mut cmd = tokio::process::Command::new(&current_exe);
-        cmd.args(&["server", "start"]);
+        cmd.args(["server", "start"]);
 
         // Pass through RUST_LOG environment variable
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
@@ -288,8 +285,8 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
         } else {
             println!("💡 Claude will use session ID: {}", session_id);
         }
-        let project_path = if working_dir.starts_with('/') {
-            format!("-{}", working_dir[1..].replace('/', "-"))
+        let project_path = if let Some(stripped) = working_dir.strip_prefix('/') {
+            format!("-{}", stripped.replace('/', "-"))
         } else {
             format!("-{}", working_dir.replace('/', "-"))
         };
@@ -384,7 +381,7 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
                 // Start server in background (detached)
                 let current_exe = std::env::current_exe()?;
                 let mut cmd = tokio::process::Command::new(&current_exe);
-                cmd.args(&["server", "start", "--port", &port.to_string()]);
+                cmd.args(["server", "start", "--port", &port.to_string()]);
 
                 // Pass through RUST_LOG environment variable
                 if let Ok(rust_log) = std::env::var("RUST_LOG") {
