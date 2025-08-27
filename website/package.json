@@ -7,7 +7,7 @@
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
     "start": "next start",
-    "lint": "biome check",
+    "lint": "biome check && tsc --noEmit",
     "format": "biome format --write"
   },
   "dependencies": {

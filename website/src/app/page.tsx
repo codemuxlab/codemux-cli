@@ -12,7 +12,7 @@ const Circle = ({
 }: {
   className?: string;
   children: React.ReactNode;
-  ref?: React.RefObject<HTMLDivElement>;
+  ref?: React.RefObject<HTMLDivElement | null>;
 }) => {
   return (
     <div
