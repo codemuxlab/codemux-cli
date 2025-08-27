@@ -12,7 +12,7 @@ Codemux is a specialized terminal multiplexer for AI coding CLIs (claude, gemini
 
 Operating modes:
 - **Quick mode**: Launch a single AI session immediately
-- **Daemon mode**: Background service managing multiple project sessions
+- **Server mode**: Background service managing multiple project sessions
 
 ## Development Commands
 
@@ -30,7 +30,7 @@ just capture             # Build capture binary only (fast)
 just dev                 # Development workflow - debug mode (fast startup)
 just run                 # Production workflow - release mode (includes React app automatically)
 just run-debug           # Run with debug logging
-just daemon              # Start daemon mode
+just server              # Start server mode
 
 # Capture system
 just capture-record claude session.jsonl  # Record session to JSONL
@@ -66,7 +66,7 @@ SKIP_WEB_BUILD=1 cargo build --bin codemux-capture  # Capture binary only
 cargo run --bin codemux                  # Development run mode (debug, no React app by default)
 cargo run --release --bin codemux       # Production run mode (includes React app automatically)
 cargo run --bin codemux -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
-cargo run --bin codemux -- daemon       # Daemon mode
+cargo run --bin codemux -- server start # Server mode
 
 # Capture system
 SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
@@ -109,20 +109,20 @@ npx expo export         # Export for production
 1. **CLI Interface** (using clap):
    - `codemux run <tool> [args]` - Quick launch mode
    - `codemux run <tool> --continue` - Continue from most recent JSONL conversation file
-   - `codemux daemon` - Start daemon mode
+   - `codemux server start` - Start server mode
    - `codemux add-project <path>` - Register a project
    - `codemux list` - List projects/sessions
-   - `codemux stop` - Stop daemon
+   - `codemux stop` - Stop server
 
 2. **Whitelist System**: 
    - Configurable list of allowed AI CLI tools (claude, gemini, aider, etc.)
    - Tool-specific prompt detection patterns
 
 3. **PTY Session Management**:
-   - **Channel-based Architecture**: PTY sessions communicate via channels (tokio::sync in run mode, WebSocket in daemon mode)
+   - **Channel-based Architecture**: PTY sessions communicate via channels (tokio::sync in run mode, WebSocket in server mode)
    - **PTY Session Component**: Independent component managing subprocess and PTY I/O, not tied to TUI or web UI
    - **Multiple Client Support**: Both TUI and Web UI are equal clients consuming PTY output and sending input
-   - **Unified Interface**: Same channel abstraction works for both run mode (local) and daemon mode (WebSocket-based)
+   - **Unified Interface**: Same channel abstraction works for both run mode (local) and server mode (WebSocket-based)
 
 4. **Client Architecture**:
    - **TUI Client**: Full terminal interface sending complete input stream (keystrokes, control sequences, resize events)
@@ -161,7 +161,7 @@ When implementing features, consider using:
 - `serde` + `serde_json` for serialization
 - `regex` for prompt pattern detection
 - `notify` for file system watching (project changes)
-- `sqlx` with SQLite for daemon state persistence
+- `sqlx` with SQLite for server state persistence
 
 ## Implementation Notes
 
@@ -169,7 +169,7 @@ When implementing features, consider using:
 - **Channel Abstraction**: PTY sessions expose input/output/control channels. TUI and Web UI are both clients using same channel interface.
 - **PTY Session Independence**: PTY sessions are standalone components, not owned by TUI or web server. They manage subprocess lifecycle independently.
 - **Client Equality**: TUI and Web UI are equal clients. Both can resize PTY, send input, receive output.
-- **Mode Consistency**: Same architecture for run mode (local channels) and daemon mode (WebSocket channels).
+- **Mode Consistency**: Same architecture for run mode (local channels) and server mode (WebSocket channels).
 
 ### Input/Output Handling  
 - **TUI Input**: Sends individual keystrokes including `\r` for Enter key directly to PTY
@@ -183,7 +183,7 @@ When implementing features, consider using:
 - **Prompt Detection**: Parse ANSI escape codes and common prompt patterns from AI CLIs
 - **UI Enhancement**: When detecting prompts, send structured JSON to web client instead of raw terminal output
 - **Security**: Validate all commands against whitelist before execution
-- **State Management**: In daemon mode, persist project list and session state to SQLite
+- **State Management**: In server mode, persist project list and session state to SQLite
 - **PTY Sizing**: Both TUI and Web UI can control PTY size. PTY session arbitrates resize requests (last-writer-wins).
   - **Web UI Scaling**: Implements proper scaling with `translate()` + `scale()` transforms, dimension validation, and centering
   - **Resize Handling**: Clear transforms during resize operations to prevent conflicts, use proper timing with requestAnimationFrame

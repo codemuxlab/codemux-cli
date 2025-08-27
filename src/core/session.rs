@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
     pub agent: String,

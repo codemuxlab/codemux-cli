@@ -14,39 +14,27 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::process::Command;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::assets::embedded::ReactAssets;
-use crate::core::pty_session::{PtyInputMessage, PtyChannels, GridUpdateMessage};
+use crate::core::{WebSocketMessage};
 use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
-use crate::server::SessionManager;
+use crate::server::manager::SessionManagerHandle;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub session_manager: Option<Arc<RwLock<SessionManager>>>,
-    pub _is_daemon_mode: bool,
-    pub grid_broadcast_tx: Option<tokio::sync::broadcast::Sender<String>>,
-    pub pty_channels: Option<PtyChannels>,
-    pub run_mode_session_id: Option<String>, // For run mode, stores the actual session ID
+    pub session_manager: SessionManagerHandle,
 }
 
 pub async fn start_web_server(
     port: u16,
-    session_manager: Option<Arc<RwLock<SessionManager>>>,
+    session_manager: SessionManagerHandle,
 ) -> Result<()> {
-    let state = AppState {
-        session_manager,
-        _is_daemon_mode: true,
-        grid_broadcast_tx: None,
-        pty_channels: None,
-        run_mode_session_id: None,
-    };
+    let state = AppState { session_manager };
 
     let app = Router::new()
-        .route("/", get(daemon_index))
+        .route("/", get(server_index))
         .route("/session/:session_id", get(session_page))
         .route("/ws/:session_id", get(websocket_handler))
         .route("/api/sessions", axum::routing::post(create_session))
@@ -58,6 +46,7 @@ pub async fn start_web_server(
         .route("/api/sessions/:id/git/diff/*path", get(get_git_file_diff))
         .route("/api/projects", get(list_projects))
         .route("/api/projects", axum::routing::post(add_project))
+        .route("/api/shutdown", axum::routing::post(shutdown_server))
         .route("/_expo/static/*path", get(static_handler))
         .route("/*path", get(react_spa_handler))
         .layer(
@@ -72,18 +61,18 @@ pub async fn start_web_server(
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    tracing::info!("Daemon web server listening on http://0.0.0.0:{}", port);
+    tracing::info!("CodeMux web server listening on http://0.0.0.0:{}", port);
 
     axum::serve(listener, app).await?;
     Ok(())
 }
 
-async fn daemon_index() -> impl IntoResponse {
+async fn server_index() -> impl IntoResponse {
     serve_react_asset("index.html").await
 }
 
 async fn session_page(State(_state): State<AppState>) -> impl IntoResponse {
-    // For daemon mode, serve React app
+    // For server mode, serve React app
     serve_react_asset("index.html").await
 }
 
@@ -107,12 +96,14 @@ async fn handle_socket(
         session_id
     );
 
-    // Get PTY channels from state
-    let pty_channels = if let Some(channels) = &state.pty_channels {
+    // Get PTY channels from session manager
+    tracing::debug!("WebSocket requesting channels for session: {}", session_id);
+    let pty_channels = if let Some(channels) = state.session_manager.get_session_channels(&session_id).await {
+        tracing::debug!("WebSocket found channels for session: {}", session_id);
         channels
     } else {
         tracing::error!(
-            "WebSocket: No PTY channels available for session: {}",
+            "WebSocket: No PTY channels found for session: {} - session may not exist or failed to start",
             session_id
         );
         return;
@@ -124,18 +115,23 @@ async fn handle_socket(
     } else {
         &session_id
     };
-    let welcome_msg = serde_json::json!({
-        "type": "output",
-        "content": format!("Connected to session {} - Claude Code TUI starting...\r\n", session_short),
-        "source": "system"
-    });
+    let welcome_msg = WebSocketMessage::Output {
+        data: crate::core::pty_session::PtyOutputMessage {
+            data: format!("Connected to session {} - Claude Code TUI starting...\r\n", session_short).into_bytes(),
+            timestamp: std::time::SystemTime::now(),
+        }
+    };
 
-    if socket
-        .send(Message::Text(welcome_msg.to_string()))
-        .await
-        .is_err()
-    {
-        return;
+    if let Ok(welcome_str) = serde_json::to_string(&welcome_msg) {
+        tracing::debug!("WebSocket sending welcome message: {}", welcome_str);
+        if socket
+            .send(Message::Text(welcome_str))
+            .await
+            .is_err()
+        {
+            tracing::error!("Failed to send welcome message via WebSocket");
+            return;
+        }
     }
 
     // Subscribe to PTY size updates
@@ -169,52 +165,17 @@ async fn handle_socket(
     match pty_channels.request_keyframe().await {
         Ok(keyframe) => {
             tracing::debug!("Received keyframe for new WebSocket client");
-            // Convert keyframe to JSON and send immediately
-            let keyframe_json = match keyframe {
-                GridUpdateMessage::Keyframe {
-                    size,
-                    cells,
-                    cursor,
-                    cursor_visible,
-                    timestamp,
-                } => {
-                    let cells = cells
-                        .into_iter()
-                        .filter(|(_, cell)| !cell.is_empty_space())
-                        .map(|((row, col), cell)| serde_json::json!([row, col, cell]))
-                        .collect::<Vec<_>>();
-                    tracing::debug!("Request keyframe: {}", cells.len());
-                    serde_json::json!({
-                        "type": "grid_update",
-                        "update_type": "keyframe",
-                        "size": {
-                            "rows": size.rows,
-                            "cols": size.cols
-                        },
-                        "cells": cells,
-                        "cursor": {
-                            "row": cursor.0,
-                            "col": cursor.1
-                        },
-                        "cursor_visible": cursor_visible,
-                        "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default().as_millis()
-                    })
+            let keyframe_ws_msg = WebSocketMessage::Grid { data: keyframe };
+            if let Ok(keyframe_str) = serde_json::to_string(&keyframe_ws_msg) {
+                tracing::debug!("WebSocket sending initial keyframe: {} chars", keyframe_str.len());
+                if socket
+                    .send(Message::Text(keyframe_str))
+                    .await
+                    .is_err()
+                {
+                    tracing::error!("Failed to send initial keyframe to new WebSocket client");
+                    return;
                 }
-                // This shouldn't happen for keyframe requests, but handle it
-                GridUpdateMessage::Diff { .. } => {
-                    tracing::warn!("Received diff instead of keyframe for new client request");
-                    serde_json::json!({"type": "error", "message": "Expected keyframe, got diff"})
-                }
-            };
-
-            if socket
-                .send(Message::Text(keyframe_json.to_string()))
-                .await
-                .is_err()
-            {
-                tracing::warn!("Failed to send initial keyframe to new WebSocket client");
-                return;
             }
         }
         Err(e) => {
@@ -229,50 +190,13 @@ async fn handle_socket(
             grid_update = grid_rx.recv() => {
                 match grid_update {
                     Ok(update) => {
-                        // Convert grid update to JSON format for frontend
-                        let grid_json = match update {
-                            GridUpdateMessage::Keyframe { size, cells, cursor, cursor_visible, timestamp } => {
-                                serde_json::json!({
-                                    "type": "grid_update",
-                                    "update_type": "keyframe",
-                                    "size": {
-                                        "rows": size.rows,
-                                        "cols": size.cols
-                                    },
-                                    "cells": cells.into_iter()
-                                        .filter(|(_, cell)| !cell.is_empty_space())
-                                        .map(|((row, col), cell)| {
-                                            serde_json::json!([row, col, cell])
-                                        }).collect::<Vec<_>>(),
-                                    "cursor": {
-                                        "row": cursor.0,
-                                        "col": cursor.1
-                                    },
-                                    "cursor_visible": cursor_visible,
-                                    "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default().as_millis()
-                                })
+                        let ws_msg = WebSocketMessage::Grid { data: update };
+                        if let Ok(grid_msg) = serde_json::to_string(&ws_msg) {
+                            tracing::debug!("WebSocket sending grid update: {} chars", grid_msg.len());
+                            if socket.send(Message::Text(grid_msg)).await.is_err() {
+                                tracing::error!("Failed to send grid update via WebSocket");
+                                break;
                             }
-                            GridUpdateMessage::Diff { changes, cursor, cursor_visible, timestamp } => {
-                                serde_json::json!({
-                                    "type": "grid_update",
-                                    "update_type": "diff",
-                                    "cells": changes.into_iter().map(|(row, col, cell)| {
-                                        serde_json::json!([row, col, cell])
-                                    }).collect::<Vec<_>>(),
-                                    "cursor": cursor.map(|(row, col)| serde_json::json!({
-                                        "row": row,
-                                        "col": col
-                                    })),
-                                    "cursor_visible": cursor_visible,
-                                    "timestamp": timestamp.duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap_or_default().as_millis()
-                                })
-                            }
-                        };
-
-                        if socket.send(Message::Text(grid_json.to_string())).await.is_err() {
-                            break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -290,13 +214,9 @@ async fn handle_socket(
             pty_output = pty_output_rx.recv() => {
                 match pty_output {
                     Ok(_output_msg) => {
+                        // Debug: show raw PTY output
+                        tracing::debug!("WebSocket received raw PTY output: {} bytes", _output_msg.data.len());
                         // Skip raw output - we're using grid updates now
-                        // Could optionally send for debugging:
-                        // let output_json = serde_json::json!({
-                        //     "type": "raw_output",
-                        //     "content": String::from_utf8_lossy(&output_msg.data),
-                        //     "source": "pty"
-                        // });
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         tracing::info!("PTY output channel closed");
@@ -312,14 +232,11 @@ async fn handle_socket(
             size_update = size_rx.recv() => {
                 match size_update {
                     Ok(size) => {
-                        let size_msg = serde_json::json!({
-                            "type": "pty_size",
-                            "rows": size.rows,
-                            "cols": size.cols
-                        });
-
-                        if socket.send(Message::Text(size_msg.to_string())).await.is_err() {
-                            break;
+                        let ws_msg = WebSocketMessage::PtySize { rows: size.rows, cols: size.cols };
+                        if let Ok(size_msg_str) = serde_json::to_string(&ws_msg) {
+                            if socket.send(Message::Text(size_msg_str)).await.is_err() {
+                                break;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -337,52 +254,44 @@ async fn handle_socket(
             ws_msg = socket.recv() => {
                 match ws_msg {
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) {
-                            match parsed.get("type").and_then(|t| t.as_str()) {
-                                Some("input") => {
-                                    if let Some(data) = parsed.get("data").and_then(|d| d.as_str()) {
-                                        // Legacy input: raw text data
-                                        let input_bytes = data.as_bytes().to_vec();
-
-                                        let input_msg = PtyInputMessage {
-                                            input: crate::core::pty_session::PtyInput::Raw {
-                                                data: input_bytes,
-                                                client_id: format!("websocket-{}", session_id),
-                                            },
-                                        };
-
-                                        tracing::debug!("WebSocket raw input: {:?}", data);
-
-                                        if pty_input_tx.send(input_msg).is_err() {
-                                            tracing::error!("Failed to send input to PTY");
-                                            break;
+                        tracing::debug!("WebSocket received message: {} chars", text.len());
+                        if let Ok(ws_msg) = serde_json::from_str::<WebSocketMessage>(&text) {
+                            match ws_msg {
+                                WebSocketMessage::Input { data } => {
+                                    tracing::debug!("WebSocket received input message");
+                                    if pty_input_tx.send(data).is_err() {
+                                        tracing::error!("Failed to send input to PTY");
+                                        break;
+                                    }
+                                }
+                                WebSocketMessage::Resize { rows, cols } => {
+                                    tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
+                                    // Send resize control message to PTY
+                                    // TODO: Handle resize if needed
+                                }
+                                WebSocketMessage::RequestKeyframe => {
+                                    tracing::debug!("WebSocket received keyframe request");
+                                    // Send current keyframe
+                                    match pty_channels.request_keyframe().await {
+                                        Ok(keyframe) => {
+                                            let keyframe_msg = WebSocketMessage::Grid { data: keyframe };
+                                            if let Ok(keyframe_str) = serde_json::to_string(&keyframe_msg) {
+                                                if socket.send(Message::Text(keyframe_str)).await.is_err() {
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Failed to get keyframe on request: {}", e);
                                         }
                                     }
                                 }
-                                Some("key") => {
-                                    // New key event input
-                                    if let Ok(key_event) = serde_json::from_value::<crate::core::pty_session::KeyEvent>(parsed.clone()) {
-                                        tracing::debug!("WebSocket key event: {:?}", key_event);
-
-                                        let input_msg = PtyInputMessage {
-                                            input: crate::core::pty_session::PtyInput::Key {
-                                                event: key_event,
-                                                client_id: format!("websocket-{}", session_id),
-                                            },
-                                        };
-
-                                        if pty_input_tx.send(input_msg).is_err() {
-                                            tracing::error!("Failed to send key event to PTY");
-                                            break;
-                                        }
-                                    }
+                                _ => {
+                                    tracing::debug!("Received server message type, ignoring");
                                 }
-                                Some("resize") => {
-                                    // Web UI resize requests are ignored - PTY size controlled by terminal
-                                    tracing::debug!("Ignoring resize request from web UI - PTY size follows terminal");
-                                }
-                                _ => {}
                             }
+                        } else {
+                            tracing::warn!("Failed to parse WebSocket message: {}", text);
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
@@ -413,22 +322,26 @@ struct CreateSessionRequest {
     agent: String,
     args: Vec<String>,
     project_id: Option<String>,
+    path: Option<String>,
 }
 
 async fn create_session(
     State(state): State<AppState>,
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<SessionInfo>, String> {
-    let mut manager = match &state.session_manager {
-        Some(sm) => sm.write().await,
-        None => return Err("Session manager not available in run mode".to_string()),
-    };
-    match manager
-        .create_session(req.agent, req.args, req.project_id)
+    tracing::debug!("Creating session with agent: {}, args: {:?}", req.agent, req.args);
+    match state.session_manager
+        .create_session_with_path(req.agent, req.args, req.project_id, req.path)
         .await
     {
-        Ok(info) => Ok(Json(info)),
-        Err(e) => Err(e.to_string()),
+        Ok(info) => {
+            tracing::info!("Session created successfully: {}", info.id);
+            Ok(Json(info))
+        },
+        Err(e) => {
+            tracing::error!("Failed to create session: {}", e);
+            Err(e.to_string())
+        }
     }
 }
 
@@ -436,12 +349,9 @@ async fn get_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<Json<SessionInfo>, String> {
-    let manager = match &state.session_manager {
-        Some(sm) => sm.read().await,
-        None => return Err("Session manager not available in run mode".to_string()),
-    };
-    manager
+    state.session_manager
         .get_session(&id)
+        .await
         .map(Json)
         .ok_or_else(|| "Session not found".to_string())
 }
@@ -450,11 +360,7 @@ async fn delete_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Result<String, String> {
-    let mut manager = match &state.session_manager {
-        Some(sm) => sm.write().await,
-        None => return Err("Session manager not available in run mode".to_string()),
-    };
-    manager
+    state.session_manager
         .close_session(&id)
         .await
         .map(|_| "Session closed".to_string())
@@ -471,15 +377,7 @@ async fn stream_session_jsonl(
 
     let stream = async_stream::stream! {
         // Get session info to determine the agent
-        let manager = match &state.session_manager {
-            Some(sm) => sm.read().await,
-            None => {
-                yield Ok(Event::default().data("Session manager not available"));
-                return;
-            }
-        };
-        let session_info = manager.get_session(&session_id);
-        drop(manager);
+        let session_info = state.session_manager.get_session(&session_id).await;
 
         if let Some(info) = session_info {
             // Only process Claude sessions
@@ -567,64 +465,25 @@ async fn stream_session_jsonl(
 }
 
 async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectWithSessions>> {
-    match &state.session_manager {
-        Some(sm) => {
-            // Daemon mode: return actual projects with their sessions
-            let manager = sm.read().await;
-            let projects = manager.list_projects();
-            let sessions = manager.list_sessions();
+    // Return actual projects with their sessions
+    let projects = state.session_manager.list_projects().await;
+    let sessions = state.session_manager.list_sessions().await;
+    
+    let projects_with_sessions = projects.into_iter().map(|project| {
+        let project_sessions = sessions.iter()
+            .filter(|session| session.project.as_deref() == Some(&project.id))
+            .cloned()
+            .collect();
             
-            let projects_with_sessions = projects.into_iter().map(|project| {
-                let project_sessions = sessions.iter()
-                    .filter(|session| session.project.as_deref() == Some(&project.id))
-                    .cloned()
-                    .collect();
-                    
-                ProjectWithSessions {
-                    id: project.id,
-                    name: project.name,
-                    path: project.path,
-                    sessions: project_sessions,
-                }
-            }).collect();
-            
-            Json(projects_with_sessions)
-        },
-        None => {
-            // Quick mode: return a default project with current directory and default session
-            let current_dir = std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .to_string_lossy()
-                .to_string();
-            
-            let project_name = std::path::Path::new(&current_dir)
-                .file_name()
-                .unwrap_or_else(|| "unknown".as_ref())
-                .to_string_lossy()
-                .to_string();
-            
-            // Create default session if PTY channels exist
-            let sessions = if let Some(_pty_channels) = &state.pty_channels {
-                vec![SessionInfo {
-                    id: state.run_mode_session_id.clone().unwrap_or_else(|| "default-session".to_string()),
-                    agent: "claude".to_string(),
-                    project: Some("default".to_string()),
-                    status: "running".to_string(),
-                }]
-            } else {
-                vec![]
-            };
-            
-            let default_project = ProjectWithSessions {
-                id: "default".to_string(),
-                name: project_name,
-                path: current_dir,
-                sessions,
-            };
-            
-            Json(vec![default_project])
+        ProjectWithSessions {
+            id: project.id,
+            name: project.name,
+            path: project.path,
+            sessions: project_sessions,
         }
-    }
+    }).collect();
+    
+    Json(projects_with_sessions)
 }
 
 #[derive(Deserialize)]
@@ -637,11 +496,7 @@ async fn add_project(
     State(state): State<AppState>,
     Json(req): Json<AddProjectRequest>,
 ) -> Result<Json<ProjectInfo>, String> {
-    let mut manager = match &state.session_manager {
-        Some(sm) => sm.write().await,
-        None => return Err("Session manager not available in run mode".to_string()),
-    };
-    match manager.add_project(req.name, req.path).await {
+    match state.session_manager.create_project(req.name, req.path).await {
         Ok(info) => Ok(Json(info)),
         Err(e) => Err(e.to_string()),
     }
@@ -778,13 +633,8 @@ async fn get_git_file_diff(Path((session_id, file_path)): Path<(String, String)>
 // Helper functions
 async fn get_session_working_dir(session_id: &str, state: &AppState) -> Option<String> {
     // For run mode, use current directory
-    if state.session_manager.is_none() {
-        return Some(std::env::current_dir().ok()?.to_string_lossy().to_string());
-    }
-
-    // For daemon mode, get session working directory
-    let manager = state.session_manager.as_ref()?.read().await;
-    let _session_info = manager.get_session(session_id)?;
+    // Get session working directory from session manager
+    let _session_info = state.session_manager.get_session(session_id).await?;
     // TODO: Get actual working directory from session info
     // For now, return current directory
     Some(std::env::current_dir().ok()?.to_string_lossy().to_string())
@@ -1007,4 +857,22 @@ fn parse_diff_stats(diff_content: &str) -> (u32, u32) {
     }
 
     (additions, deletions)
+}
+
+async fn shutdown_server(State(state): State<AppState>) -> impl IntoResponse {
+    tracing::info!("Received shutdown request");
+    
+    // Gracefully shutdown all sessions
+    tracing::info!("Shutting down all sessions...");
+    state.session_manager.shutdown_all_sessions().await;
+    
+    // Spawn a task to exit the process after a short delay
+    // This allows the HTTP response to be sent before the server shuts down
+    tokio::spawn(async {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        tracing::info!("Exiting server process");
+        std::process::exit(0);
+    });
+    
+    Json(serde_json::json!({"status": "shutdown initiated"})).into_response()
 }

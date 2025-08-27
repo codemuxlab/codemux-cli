@@ -97,14 +97,14 @@ capture-record agent output:
 capture-analyze file:
     SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --analyze {{file}} --verbose
 
-# Start daemon mode
-daemon:
-    cargo run --bin codemux -- daemon
+# Start server mode
+server:
+    cargo run --bin codemux -- server start
 
-# Add project to daemon
+# Add project to server
 add-project path:
     cargo run --bin codemux -- add-project {{path}}
 
-# List daemon projects
+# List server projects
 list:
     cargo run --bin codemux -- list

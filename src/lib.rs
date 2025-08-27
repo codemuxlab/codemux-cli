@@ -12,7 +12,7 @@ pub mod capture;
 // Re-export commonly used types
 pub use core::{Config, SessionInfo, ProjectInfo, ProjectWithSessions};
 pub use client::http::CodeMuxClient;
-pub use server::SessionManager;
+pub use server::SessionManagerHandle;
 
 // Error handling
 pub use anyhow::{Result, Error};

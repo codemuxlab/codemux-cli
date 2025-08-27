@@ -1,26 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-
-#[derive(Debug, Clone, ValueEnum)]
-pub enum Agent {
-    Claude,
-    Gemini,
-    Aider,
-    Cursor,
-    Continue,
-}
-
-impl Agent {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Agent::Claude => "claude",
-            Agent::Gemini => "gemini",
-            Agent::Aider => "aider",
-            Agent::Cursor => "cursor",
-            Agent::Continue => "continue",
-        }
-    }
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "codemux")]
@@ -32,11 +11,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Run a single code agent session
-    Run {
-        /// The code agent to run
-        #[arg(value_enum)]
-        agent: Agent,
+    /// Run Claude AI coding assistant
+    Claude {
         /// Auto-open the web interface in browser
         #[arg(short, long)]
         open: bool,
@@ -49,7 +25,10 @@ pub enum Commands {
         /// Project path or ID (e.g. /path/to/project, ., or project-uuid)
         #[arg(long)]
         project: Option<String>,
-        /// Arguments to pass to the agent
+        /// Path to write logs to file (in addition to TUI display)
+        #[arg(long)]
+        logfile: Option<PathBuf>,
+        /// Arguments to pass to Claude
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
     },
@@ -62,21 +41,6 @@ pub enum Commands {
     Attach {
         /// Session ID to attach to
         session_id: String,
-    },
-    /// Create a new named session
-    NewSession {
-        /// Session name
-        #[arg(short, long)]
-        name: Option<String>,
-        /// The code agent to run
-        #[arg(value_enum)]
-        agent: Agent,
-        /// Project path or ID (e.g. /path/to/project, ., or project-uuid)
-        #[arg(long)]
-        project: Option<String>,
-        /// Arguments to pass to the agent
-        #[arg(trailing_var_arg = true)]
-        args: Vec<String>,
     },
     /// Kill a specific session
     KillSession {
@@ -106,6 +70,9 @@ pub enum ServerCommands {
         /// Port to listen on
         #[arg(short, long, default_value = "8765")]
         port: u16,
+        /// Run server in background (detached)
+        #[arg(short, long)]
+        detach: bool,
     },
     /// Show server status
     Status,
