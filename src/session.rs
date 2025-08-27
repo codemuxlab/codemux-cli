@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -136,7 +136,7 @@ impl SessionManager {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
     pub agent: String,
@@ -144,14 +144,14 @@ pub struct SessionInfo {
     pub status: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ProjectInfo {
     pub id: String,
     pub name: String,
     pub path: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ProjectWithSessions {
     pub id: String,
     pub name: String,

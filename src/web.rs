@@ -77,66 +77,7 @@ pub async fn start_web_server(
     Ok(())
 }
 
-pub async fn start_web_server_run_mode(
-    port: u16,
-    session_manager: Option<Arc<RwLock<SessionManager>>>,
-    _agent: String,
-    grid_rx: tokio::sync::broadcast::Receiver<String>,
-    pty_channels: crate::pty_session::PtyChannels,
-    session_id: String,
-) -> Result<()> {
-    // Store the broadcast sender for websocket handlers to subscribe
-    let (grid_tx, _) = tokio::sync::broadcast::channel(1000);
-    // Forward messages from the main grid receiver to our local sender
-    let grid_tx_clone = grid_tx.clone();
-    let mut grid_rx = grid_rx;
-    tokio::spawn(async move {
-        while let Ok(msg) = grid_rx.recv().await {
-            let _ = grid_tx_clone.send(msg);
-        }
-    });
-
-    let state = AppState {
-        session_manager,
-        _is_daemon_mode: false,
-        grid_broadcast_tx: Some(grid_tx),
-        pty_channels: Some(pty_channels),
-        run_mode_session_id: Some(session_id),
-    };
-
-    let app = Router::new()
-        .route("/", get(run_mode_session))
-        .route("/ws/:session_id", get(websocket_handler))
-        .route("/api/sessions/:id/stream", get(stream_session_jsonl))
-        .route("/api/sessions/:id/git/status", get(get_git_status))
-        .route("/api/sessions/:id/git/diff", get(get_git_diff))
-        .route("/api/sessions/:id/git/diff/*path", get(get_git_file_diff))
-        .route("/api/projects", get(list_projects))
-        .route("/_expo/static/*path", get(static_handler))
-        .route("/*path", get(react_spa_handler))
-        .layer(
-            ServiceBuilder::new()
-                .layer(
-                    CorsLayer::new()
-                        .allow_origin(Any)
-                        .allow_methods(Any)
-                        .allow_headers(Any)
-                )
-        )
-        .with_state(state.clone());
-
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-    tracing::info!("Run mode web server listening on http://0.0.0.0:{}", port);
-
-    axum::serve(listener, app).await?;
-    Ok(())
-}
-
 async fn daemon_index() -> impl IntoResponse {
-    serve_react_asset("index.html").await
-}
-
-async fn run_mode_session() -> impl IntoResponse {
     serve_react_asset("index.html").await
 }
 

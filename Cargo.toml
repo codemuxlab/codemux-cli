@@ -43,6 +43,8 @@ tui-term = "0.1.11"
 vt100 = "0.15"
 rust-embed = { version = "8.5", features = ["debug-embed"] }
 mime_guess = "2.0"
+reqwest = { version = "0.12", features = ["json"] }
+url = "2.5"
 
 # The profile that 'dist' will build with
 [profile.dist]

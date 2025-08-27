@@ -1,14 +1,16 @@
 # CodeMux
 
-A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with cross-platform React Native UI. Unlike generic terminal multiplexers, CodeMux is optimized for AI code agents and provides native mobile and web interfaces for CLI interactions.
+A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with cross-platform React Native UI. Unlike generic terminal multiplexers, CodeMux uses a server-client architecture optimized for AI code agents and provides native mobile and web interfaces for CLI interactions.
 
 ## Features
 
-- **AI-Focused Terminal Multiplexing**: Run multiple AI coding sessions simultaneously
+- **Server-Client Architecture**: tmux-like session management with persistent AI agent sessions
 - **Mobile-Ready Interface**: Code from anywhere with React Native UI that runs on phones, tablets, and desktops
 - **Smart Prompt Detection**: Intercepts interactive prompts and provides native web UI components
-- **Project Management**: Organize sessions by project with daemon mode
-- **Session Persistence**: Maintain sessions across reconnections
+- **Session Persistence**: Sessions survive client disconnection and can be reattached
+- **Multi-Client Access**: Multiple clients can connect to the same session simultaneously
+- **Unified Web Interface**: Single web server manages all sessions across projects
+- **Project Management**: Organize sessions by project with centralized management
 - **Real-time Updates**: WebSocket-based communication for responsive interactions
 
 ## Quick Start
@@ -53,11 +55,23 @@ cd app && npm install
 
 ## Usage
 
-### Quick Mode - Run a single session
+### Server-Client Architecture (0.1+)
+
+CodeMux uses a server-client model similar to tmux. The server manages all AI agent sessions and the client connects to these sessions.
 
 ```bash
-# Start a Claude session
+# Start a Claude session (auto-starts server if needed)
 codemux run claude
+
+# Server management
+codemux server                    # Start server explicitly
+codemux server status            # Check server status  
+codemux server stop             # Stop server
+
+# Session management
+codemux list                    # List all active sessions
+codemux attach <session-id>     # Attach to existing session
+codemux kill-session <session-id>  # Terminate specific session
 
 # Session continuity options
 codemux run claude --continue           # Continue most recent session
@@ -65,57 +79,64 @@ codemux run claude --resume <session>   # Resume specific session
 
 # Additional options
 codemux run claude --open               # Auto-open web interface
-codemux run claude --port 3000          # Use custom port
-codemux run claude --debug              # Enable debug logging
 ```
 
-### Daemon Mode - Manage multiple projects
+### Project Management
 
 ```bash
-# Start the daemon
-codemux daemon
-
 # Add a project  
-codemux add-project /path/to/project
+codemux add-project /path/to/project --name "My Project"
 
-# List projects and sessions
-codemux list
+# List projects
+codemux list-projects
 
-# Stop the daemon
-codemux stop
+# Create session in project context
+codemux run claude --project <project-id>
 ```
 
-#### Running daemon with PM2 (Recommended)
+#### Running server as system service (Optional)
 
-For production use, run the daemon with [PM2](https://pm2.keymetrics.io/) for automatic restarts and process management:
+For persistent server operation, you can install the server as a system service:
 
+**With PM2:**
 ```bash
 # Install PM2 globally
 npm install -g pm2
 
-# Start daemon with PM2
-pm2 start codemux --name "codemux-daemon" -- daemon
+# Start server with PM2
+pm2 start codemux --name "codemux-server" -- server
 
-# View daemon status
-pm2 status
-
-# View daemon logs
-pm2 logs codemux-daemon
-
-# Restart daemon
-pm2 restart codemux-daemon
-
-# Stop daemon
-pm2 stop codemux-daemon
-
-# Auto-start daemon on system boot
+# Auto-start server on system boot
 pm2 startup
 pm2 save
 ```
 
+**With systemd (Linux):**
+```bash
+# Create systemd service file
+sudo tee /etc/systemd/system/codemux.service > /dev/null <<EOF
+[Unit]
+Description=CodeMux Server
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+ExecStart=$(which codemux) server
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start service
+sudo systemctl enable codemux
+sudo systemctl start codemux
+```
+
 ## Web Interface
 
-Once a session is started, open `http://localhost:8765` in your browser to access (or use `--open` to open automatically):
+Once the server is running, open `http://localhost:8080` in your browser to access all sessions (or use `--open` to open automatically):
 
 - **High-Performance Terminal**: Grid-based rendering with independent cell updates
 - **Native UI Components** for interactive prompts:

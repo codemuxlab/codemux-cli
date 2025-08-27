@@ -87,7 +87,7 @@ pub enum PtyInput {
 }
 
 /// Messages representing PTY input from clients
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PtyInputMessage {
     pub input: PtyInput,
 }
