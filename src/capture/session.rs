@@ -10,7 +10,7 @@ use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-use crate::session_data::{GridCell, GridCellWithPos, JsonlRecorder, SessionEvent};
+use crate::capture::session_data::{GridCell, GridCellWithPos, JsonlRecorder, SessionEvent};
 
 pub struct CaptureSession {
     agent: String,

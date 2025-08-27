@@ -17,7 +17,7 @@ use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
 use tokio::time::interval;
 
-use crate::session_data::{GridCell, SessionEvent, SessionRecording};
+use crate::capture::session_data::{GridCell, SessionEvent, SessionRecording};
 use vt100::Parser;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -2,9 +2,9 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use codemux::{Result, Config};
-use codemux::cli::{Cli, Commands, Agent, ServerCommands};
-use codemux::cli::handlers;
-use codemux::utils::tui_writer::{TuiWriter, LogLevel};
+use codemux::cli::{Cli, Commands};
+use codemux::cli::handlers::{self, RunSessionParams};
+use codemux::utils::tui_writer::TuiWriter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -17,25 +17,24 @@ async fn main() -> Result<()> {
     let config = Config::load()?;
 
     // Set up TUI writer for log capture
-    let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel();
-    let _tui_writer = TuiWriter::new(log_tx.clone());
+    let (_tui_writer, log_rx) = TuiWriter::new();
 
     // Handle commands
     match &cli.command {
         Commands::Run { agent, open, continue_session, resume_session, project, args } => {
-            handlers::run_client_session(
+            handlers::run_client_session(RunSessionParams {
                 config,
-                agent.as_str().to_string(),
-                *open,
-                *continue_session,
-                resume_session.clone(),
-                project.clone(),
-                args.clone(),
+                agent: agent.as_str().to_string(),
+                open: *open,
+                continue_session: *continue_session,
+                resume_session: resume_session.clone(),
+                project: project.clone(),
+                args: args.clone(),
                 log_rx,
-            ).await
+            }).await
         }
         Commands::Server { command } => {
-            handlers::handle_server_command(config, command.clone()).await
+            handlers::handle_server_command(config, command.as_ref().cloned()).await
         }
         Commands::Attach { session_id } => {
             handlers::attach_to_session(config, session_id.clone(), log_rx).await

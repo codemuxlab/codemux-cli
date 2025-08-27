@@ -1,4 +1,5 @@
-use crate::core::pty_session::{PtyChannels, PtyInputMessage, TerminalColor};
+use crate::core::pty_session::{PtyChannels, PtyInputMessage, TerminalColor, GridUpdateMessage, PtyControlMessage, PtyInput, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS};
+use crate::core::pty_session::GridCell as PtyGridCell;
 use crate::utils::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
 use crossterm::{
@@ -51,6 +52,51 @@ impl GridCell {
     }
 }
 
+// Convert PTY GridCell to TUI GridCell
+impl From<PtyGridCell> for GridCell {
+    fn from(pty_cell: PtyGridCell) -> Self {
+        GridCell {
+            char: pty_cell.char.chars().next().unwrap_or(' '),
+            fg_color: pty_cell.fg_color.map(|c| terminal_color_to_string(&c)),
+            bg_color: pty_cell.bg_color.map(|c| terminal_color_to_string(&c)),
+            bold: pty_cell.bold,
+            italic: pty_cell.italic,
+            underline: pty_cell.underline,
+            reverse: pty_cell.reverse,
+        }
+    }
+}
+
+// Helper function to convert TerminalColor to String
+fn terminal_color_to_string(color: &TerminalColor) -> String {
+    match color {
+        TerminalColor::Default => "default".to_string(),
+        TerminalColor::Indexed(idx) => {
+            match *idx {
+                0 => "black".to_string(),
+                1 => "red".to_string(),
+                2 => "green".to_string(),
+                3 => "yellow".to_string(),
+                4 => "blue".to_string(),
+                5 => "magenta".to_string(),
+                6 => "cyan".to_string(),
+                7 => "white".to_string(),
+                8 => "darkgray".to_string(),
+                9 => "lightred".to_string(),
+                10 => "lightgreen".to_string(),
+                11 => "lightyellow".to_string(),
+                12 => "lightblue".to_string(),
+                13 => "lightmagenta".to_string(),
+                14 => "lightcyan".to_string(),
+                15 => "gray".to_string(),
+                _ => format!("indexed-{}", idx),
+            }
+        },
+        TerminalColor::Palette(idx) => format!("palette-{}", idx),
+        TerminalColor::Rgb { r, g, b } => format!("#{:02x}{:02x}{:02x}", r, g, b),
+    }
+}
+
 // Helper function for serde skip_serializing_if
 fn is_false(b: &bool) -> bool {
     !b
@@ -83,7 +129,7 @@ pub struct SessionTui {
     status_message: String,
     system_logs: Vec<LogEntry>,
     // Terminal state from PTY session grid updates
-    terminal_grid: std::collections::HashMap<(u16, u16), crate::pty_session::GridCell>,
+    terminal_grid: std::collections::HashMap<(u16, u16), GridCell>,
     terminal_cursor: (u16, u16),
     terminal_cursor_visible: bool,
     terminal_size: (u16, u16),
@@ -123,7 +169,7 @@ impl SessionTui {
             terminal_grid: std::collections::HashMap::new(),
             terminal_cursor: (0, 0),
             terminal_cursor_visible: true, // Default to visible
-            terminal_size: (crate::pty_session::DEFAULT_PTY_ROWS, crate::pty_session::DEFAULT_PTY_COLS),
+            terminal_size: (DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS),
             pty_channels,
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),
@@ -150,11 +196,11 @@ impl SessionTui {
                 let width = std::env::var("COLUMNS")
                     .ok()
                     .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(crate::pty_session::DEFAULT_PTY_COLS);
+                    .unwrap_or(DEFAULT_PTY_COLS);
                 let height = std::env::var("LINES")
                     .ok()
                     .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(crate::pty_session::DEFAULT_PTY_ROWS);
+                    .unwrap_or(DEFAULT_PTY_ROWS);
 
                 tracing::warn!(
                     "Could not detect terminal size: {}. Using fallback size {}x{}",
@@ -240,7 +286,7 @@ impl SessionTui {
 
     async fn resize_pty_to_match_tui(&self, terminal_area: Rect) {
         let channels = &self.pty_channels;
-        let resize_msg = crate::pty_session::PtyControlMessage::Resize {
+        let resize_msg = PtyControlMessage::Resize {
             rows: terminal_area.height,
             cols: terminal_area.width,
         };
@@ -265,7 +311,7 @@ impl SessionTui {
             tracing::debug!("Sending to PTY: {:?} (bytes: {:?})", key, input_bytes);
 
             let input_msg = PtyInputMessage {
-                input: crate::pty_session::PtyInput::Raw {
+                input: PtyInput::Raw {
                     data: input_bytes,
                     client_id: "tui".to_string(),
                 },
@@ -343,7 +389,7 @@ impl SessionTui {
     async fn run_monitoring_mode(
         &mut self,
         session_info: &SessionInfo,
-        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::tui_writer::LogEntry>,
+        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::utils::tui_writer::LogEntry>,
     ) -> Result<bool> {
         tracing::info!("=== ENTERING MONITORING MODE ===");
 
@@ -502,7 +548,7 @@ impl SessionTui {
     async fn run_interactive_mode(
         &mut self,
         session_info: &SessionInfo,
-        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::tui_writer::LogEntry>,
+        log_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::utils::tui_writer::LogEntry>,
     ) -> Result<bool> {
         tracing::debug!("=== ENTERING INTERACTIVE MODE ===");
 
@@ -519,7 +565,7 @@ impl SessionTui {
                 tracing::debug!("Received keyframe for TUI interactive mode");
                 // Apply keyframe to TUI terminal state
                 match keyframe {
-                    crate::pty_session::GridUpdateMessage::Keyframe {
+                    GridUpdateMessage::Keyframe {
                         size,
                         cells,
                         cursor,
@@ -527,7 +573,9 @@ impl SessionTui {
                         ..
                     } => {
                         // Update terminal state from keyframe and mark for full redraw
-                        self.terminal_grid = cells;
+                        self.terminal_grid = cells.into_iter()
+                            .map(|((row, col), pty_cell)| ((row, col), GridCell::from(pty_cell)))
+                            .collect();
                         self.terminal_cursor = cursor;
                         self.terminal_cursor_visible = cursor_visible;
                         self.terminal_size = (size.rows, size.cols);
@@ -548,14 +596,14 @@ impl SessionTui {
                                             "({},{})='{}' ",
                                             row,
                                             col,
-                                            cell.char.replace('\n', "\\n").replace('\r', "\\r")
+                                            cell.char.to_string().replace('\n', "\\n").replace('\r', "\\r")
                                         ));
                                     }
 
-                                    if !cell.char.trim().is_empty() {
+                                    if cell.char != ' ' {
                                         non_empty_cells += 1;
                                         if sample_content.len() < 50 {
-                                            sample_content.push_str(&cell.char);
+                                            sample_content.push(cell.char);
                                         }
                                     }
                                 }
@@ -578,7 +626,7 @@ impl SessionTui {
                             sample_content.replace('\n', "\\n")
                         );
                     }
-                    crate::pty_session::GridUpdateMessage::Diff { .. } => {
+                    GridUpdateMessage::Diff { .. } => {
                         tracing::warn!("Received diff instead of keyframe (unexpected)");
                     }
                 }
@@ -720,9 +768,11 @@ impl SessionTui {
                                 Ok(update) => {
                                     // Apply grid update to TUI terminal state
                                     match update {
-                                        crate::pty_session::GridUpdateMessage::Keyframe { size, cells, cursor, .. } => {
+                                        GridUpdateMessage::Keyframe { size, cells, cursor, .. } => {
                                             // Keyframes require full redraw
-                                            self.terminal_grid = cells;
+                                            self.terminal_grid = cells.into_iter()
+                                                .map(|((row, col), pty_cell)| ((row, col), GridCell::from(pty_cell)))
+                                                .collect();
                                             self.terminal_cursor = cursor;
                                             self.terminal_size = (size.rows, size.cols);
                                             self.mark_full_redraw();
@@ -732,7 +782,7 @@ impl SessionTui {
                                                     self.terminal_grid.len(), cursor.0, cursor.1, size.rows, size.cols);
                                             }
                                         }
-                                        crate::pty_session::GridUpdateMessage::Diff { changes, cursor, .. } => {
+                                        GridUpdateMessage::Diff { changes, cursor, .. } => {
                                             let num_changes = changes.len();
 
                                             // Collect dirty cell positions for incremental rendering
@@ -742,7 +792,7 @@ impl SessionTui {
 
                                             // Apply changes to terminal grid
                                             for (row, col, cell) in changes {
-                                                self.terminal_grid.insert((row, col), cell);
+                                                self.terminal_grid.insert((row, col), GridCell::from(cell));
                                             }
 
                                             // Mark changed cells as dirty for incremental rendering
@@ -854,7 +904,7 @@ impl SessionTui {
                 } else {
                     // Count non-empty cells for debugging
                     let non_empty = terminal_grid.values()
-                        .filter(|cell| !cell.char.trim().is_empty())
+                        .filter(|cell| cell.char != ' ')
                         .count();
                     if non_empty == 0 {
                         tracing::warn!("All {} grid cells are empty/whitespace during draw!", terminal_grid.len());
@@ -926,7 +976,7 @@ impl SessionTui {
 
 /// Render terminal content from grid state for display
 fn render_terminal_from_grid(
-    terminal_grid: &std::collections::HashMap<(u16, u16), crate::pty_session::GridCell>,
+    terminal_grid: &std::collections::HashMap<(u16, u16), GridCell>,
     terminal_size: (u16, u16),
     cursor_pos: (u16, u16),
     cursor_visible: bool,
@@ -952,12 +1002,12 @@ fn render_terminal_from_grid(
                     .fg(cell
                         .fg_color
                         .as_ref()
-                        .and_then(|c| terminal_color_to_ratatui(c))
+                        .and_then(|c| string_color_to_ratatui(c))
                         .unwrap_or(Color::Reset))
                     .bg(cell
                         .bg_color
                         .as_ref()
-                        .and_then(|c| terminal_color_to_ratatui(c))
+                        .and_then(|c| string_color_to_ratatui(c))
                         .unwrap_or(Color::Reset))
                     .add_modifier(if cell.bold {
                         Modifier::BOLD
@@ -991,7 +1041,7 @@ fn render_terminal_from_grid(
                     current_line.clear();
                 }
 
-                current_line.push_str(&cell.char);
+                current_line.push(cell.char);
                 current_style = cell_style;
             } else {
                 // Empty cell - use space, but highlight if cursor is here and visible
@@ -1030,34 +1080,39 @@ fn render_terminal_from_grid(
     lines
 }
 
-/// Convert terminal color to ratatui Color
-fn terminal_color_to_ratatui(color: &TerminalColor) -> Option<Color> {
-    match color {
-        TerminalColor::Default => None,
-        TerminalColor::Indexed(idx) => {
-            // Use standard 16 colors
-            match *idx {
-                0 => Some(Color::Black),
-                1 => Some(Color::Red),
-                2 => Some(Color::Green),
-                3 => Some(Color::Yellow),
-                4 => Some(Color::Blue),
-                5 => Some(Color::Magenta),
-                6 => Some(Color::Cyan),
-                7 => Some(Color::White),
-                8 => Some(Color::DarkGray),
-                9 => Some(Color::LightRed),
-                10 => Some(Color::LightGreen),
-                11 => Some(Color::LightYellow),
-                12 => Some(Color::LightBlue),
-                13 => Some(Color::LightMagenta),
-                14 => Some(Color::LightCyan),
-                15 => Some(Color::Gray),
-                _ => Some(Color::Indexed(*idx)),
-            }
+
+/// Convert color string to ratatui Color
+fn string_color_to_ratatui(color_str: &str) -> Option<Color> {
+    if color_str.starts_with('#') && color_str.len() == 7 {
+        // Parse hex color like #ff0000
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&color_str[1..3], 16),
+            u8::from_str_radix(&color_str[3..5], 16), 
+            u8::from_str_radix(&color_str[5..7], 16),
+        ) {
+            return Some(Color::Rgb(r, g, b));
         }
-        TerminalColor::Palette(idx) => Some(Color::Indexed(*idx)),
-        TerminalColor::Rgb { r, g, b } => Some(Color::Rgb(*r, *g, *b)),
+    }
+    
+    // Try parsing named colors
+    match color_str.to_lowercase().as_str() {
+        "black" => Some(Color::Black),
+        "red" => Some(Color::Red),
+        "green" => Some(Color::Green),
+        "yellow" => Some(Color::Yellow),
+        "blue" => Some(Color::Blue),
+        "magenta" => Some(Color::Magenta),
+        "cyan" => Some(Color::Cyan),
+        "white" => Some(Color::White),
+        "gray" | "grey" => Some(Color::Gray),
+        "darkgray" | "darkgrey" => Some(Color::DarkGray),
+        "lightred" => Some(Color::LightRed),
+        "lightgreen" => Some(Color::LightGreen),
+        "lightyellow" => Some(Color::LightYellow),
+        "lightblue" => Some(Color::LightBlue),
+        "lightmagenta" => Some(Color::LightMagenta),
+        "lightcyan" => Some(Color::LightCyan),
+        _ => None,
     }
 }
 

@@ -99,7 +99,7 @@ pub enum Commands {
     Stop,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone)]
 pub enum ServerCommands {
     /// Start the server explicitly
     Start {

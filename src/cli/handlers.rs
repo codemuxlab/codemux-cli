@@ -6,16 +6,18 @@ use crate::cli::ServerCommands;
 use crate::utils::tui_writer::LogEntry;
 use std::path::PathBuf;
 
-pub async fn run_client_session(
-    _config: Config,
-    _agent: String,
-    _open: bool,
-    _continue_session: bool,
-    _resume_session: Option<String>,
-    _project: Option<String>,
-    _args: Vec<String>,
-    _log_rx: tokio::sync::mpsc::UnboundedReceiver<LogEntry>,
-) -> Result<()> {
+pub struct RunSessionParams {
+    pub config: Config,
+    pub agent: String,
+    pub open: bool,
+    pub continue_session: bool,
+    pub resume_session: Option<String>,
+    pub project: Option<String>,
+    pub args: Vec<String>,
+    pub log_rx: tokio::sync::mpsc::UnboundedReceiver<LogEntry>,
+}
+
+pub async fn run_client_session(_params: RunSessionParams) -> Result<()> {
     println!("Run command - implementation needed");
     Ok(())
 }

@@ -43,14 +43,10 @@ impl CodeMuxClient {
     
     /// Check if server is running by trying to connect
     pub async fn is_server_running(&self) -> bool {
-        match self.client.get(&format!("{}/api/projects", self.base_url))
+        self.client.get(format!("{}/api/projects", self.base_url))
             .timeout(Duration::from_secs(2))
             .send()
-            .await 
-        {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+            .await.is_ok()
     }
     
     /// Create a new session on the server
@@ -67,7 +63,7 @@ impl CodeMuxClient {
         };
         
         let response = self.client
-            .post(&format!("{}/api/sessions", self.base_url))
+            .post(format!("{}/api/sessions", self.base_url))
             .json(&request)
             .send()
             .await?;
@@ -83,7 +79,7 @@ impl CodeMuxClient {
     /// Get session information
     pub async fn get_session(&self, session_id: &str) -> Result<SessionInfo> {
         let response = self.client
-            .get(&format!("{}/api/sessions/{}", self.base_url, session_id))
+            .get(format!("{}/api/sessions/{}", self.base_url, session_id))
             .send()
             .await?;
             
@@ -111,7 +107,7 @@ impl CodeMuxClient {
     /// Delete a session
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
         let response = self.client
-            .delete(&format!("{}/api/sessions/{}", self.base_url, session_id))
+            .delete(format!("{}/api/sessions/{}", self.base_url, session_id))
             .send()
             .await?;
             
@@ -127,7 +123,7 @@ impl CodeMuxClient {
         let request = CreateProjectRequest { name, path };
         
         let response = self.client
-            .post(&format!("{}/api/projects", self.base_url))
+            .post(format!("{}/api/projects", self.base_url))
             .json(&request)
             .send()
             .await?;
@@ -143,7 +139,7 @@ impl CodeMuxClient {
     /// List all projects
     pub async fn list_projects(&self) -> Result<Vec<ProjectWithSessions>> {
         let response = self.client
-            .get(&format!("{}/api/projects", self.base_url))
+            .get(format!("{}/api/projects", self.base_url))
             .send()
             .await?;
             

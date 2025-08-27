@@ -20,7 +20,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::assets::embedded::ReactAssets;
-use crate::core::pty_session::PtyInputMessage;
+use crate::core::pty_session::{PtyInputMessage, PtyChannels, GridUpdateMessage};
 use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
 use crate::server::SessionManager;
 
@@ -29,7 +29,7 @@ pub struct AppState {
     pub session_manager: Option<Arc<RwLock<SessionManager>>>,
     pub _is_daemon_mode: bool,
     pub grid_broadcast_tx: Option<tokio::sync::broadcast::Sender<String>>,
-    pub pty_channels: Option<crate::pty_session::PtyChannels>,
+    pub pty_channels: Option<PtyChannels>,
     pub run_mode_session_id: Option<String>, // For run mode, stores the actual session ID
 }
 
@@ -171,7 +171,7 @@ async fn handle_socket(
             tracing::debug!("Received keyframe for new WebSocket client");
             // Convert keyframe to JSON and send immediately
             let keyframe_json = match keyframe {
-                crate::pty_session::GridUpdateMessage::Keyframe {
+                GridUpdateMessage::Keyframe {
                     size,
                     cells,
                     cursor,
@@ -202,7 +202,7 @@ async fn handle_socket(
                     })
                 }
                 // This shouldn't happen for keyframe requests, but handle it
-                crate::pty_session::GridUpdateMessage::Diff { .. } => {
+                GridUpdateMessage::Diff { .. } => {
                     tracing::warn!("Received diff instead of keyframe for new client request");
                     serde_json::json!({"type": "error", "message": "Expected keyframe, got diff"})
                 }
@@ -231,7 +231,7 @@ async fn handle_socket(
                     Ok(update) => {
                         // Convert grid update to JSON format for frontend
                         let grid_json = match update {
-                            crate::pty_session::GridUpdateMessage::Keyframe { size, cells, cursor, cursor_visible, timestamp } => {
+                            GridUpdateMessage::Keyframe { size, cells, cursor, cursor_visible, timestamp } => {
                                 serde_json::json!({
                                     "type": "grid_update",
                                     "update_type": "keyframe",
@@ -253,7 +253,7 @@ async fn handle_socket(
                                         .unwrap_or_default().as_millis()
                                 })
                             }
-                            crate::pty_session::GridUpdateMessage::Diff { changes, cursor, cursor_visible, timestamp } => {
+                            GridUpdateMessage::Diff { changes, cursor, cursor_visible, timestamp } => {
                                 serde_json::json!({
                                     "type": "grid_update",
                                     "update_type": "diff",
@@ -345,7 +345,7 @@ async fn handle_socket(
                                         let input_bytes = data.as_bytes().to_vec();
 
                                         let input_msg = PtyInputMessage {
-                                            input: crate::pty_session::PtyInput::Raw {
+                                            input: crate::core::pty_session::PtyInput::Raw {
                                                 data: input_bytes,
                                                 client_id: format!("websocket-{}", session_id),
                                             },
@@ -361,11 +361,11 @@ async fn handle_socket(
                                 }
                                 Some("key") => {
                                     // New key event input
-                                    if let Ok(key_event) = serde_json::from_value::<crate::pty_session::KeyEvent>(parsed.clone()) {
+                                    if let Ok(key_event) = serde_json::from_value::<crate::core::pty_session::KeyEvent>(parsed.clone()) {
                                         tracing::debug!("WebSocket key event: {:?}", key_event);
 
                                         let input_msg = PtyInputMessage {
-                                            input: crate::pty_session::PtyInput::Key {
+                                            input: crate::core::pty_session::PtyInput::Key {
                                                 event: key_event,
                                                 client_id: format!("websocket-{}", session_id),
                                             },
@@ -792,7 +792,7 @@ async fn get_session_working_dir(session_id: &str, state: &AppState) -> Option<S
 
 async fn execute_git_status(working_dir: &str) -> Result<GitStatus, Box<dyn std::error::Error + Send + Sync>> {
     let output = Command::new("git")
-        .args(&["status", "--porcelain", "-b", "--untracked-files=all"])
+        .args(["status", "--porcelain", "-b", "--untracked-files=all"])
         .current_dir(working_dir)
         .output()?;
 
@@ -844,7 +844,7 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
 
     // Get tracked file changes
     let output = Command::new("git")
-        .args(&["diff", "--name-status"])
+        .args(["diff", "--name-status"])
         .current_dir(working_dir)
         .output()?;
 
@@ -866,7 +866,7 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
 
             // Get detailed diff for this file
             let diff_output = Command::new("git")
-                .args(&["diff", file_path])
+                .args(["diff", file_path])
                 .current_dir(working_dir)
                 .output()?;
 
@@ -888,7 +888,7 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
 
     // Add untracked files (show full content as "added")
     let untracked_output = Command::new("git")
-        .args(&["status", "--porcelain", "--untracked-files=all"])
+        .args(["status", "--porcelain", "--untracked-files=all"])
         .current_dir(working_dir)
         .output()?;
 
@@ -943,7 +943,7 @@ async fn execute_git_diff(working_dir: &str) -> Result<GitDiff, Box<dyn std::err
 
 async fn execute_git_file_diff(working_dir: &str, file_path: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let output = Command::new("git")
-        .args(&["diff", file_path])
+        .args(["diff", file_path])
         .current_dir(working_dir)
         .output()?;
 
@@ -956,7 +956,7 @@ async fn execute_git_file_diff(working_dir: &str, file_path: &str) -> Result<Str
 
     // If git diff returns empty or fails, check if it's an untracked file
     let status_output = Command::new("git")
-        .args(&["status", "--porcelain", file_path])
+        .args(["status", "--porcelain", file_path])
         .current_dir(working_dir)
         .output()?;
 
