@@ -1,7 +1,6 @@
 use crate::core::pty_session::GridCell as PtyGridCell;
 use crate::core::pty_session::{
     GridUpdateMessage, PtyChannels, PtyControlMessage, PtyInput, PtyInputMessage, TerminalColor,
-    DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS,
 };
 use crate::utils::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
@@ -21,6 +20,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame, Terminal,
 };
+
+// UI Layout constants
+const STATUS_BAR_HEIGHT: u16 = 1;
 use serde::{Deserialize, Serialize};
 use std::io;
 use tokio::time::{Duration, Instant};
@@ -133,7 +135,6 @@ pub struct SessionTui {
     terminal_grid: std::collections::HashMap<(u16, u16), GridCell>,
     terminal_cursor: (u16, u16),
     terminal_cursor_visible: bool,
-    terminal_size: (u16, u16),
     // New channel-based PTY communication (optional until WebSocket connects)
     pty_channels: Option<PtyChannels>,
     // Keyframe state tracking
@@ -172,8 +173,7 @@ impl SessionTui {
             terminal_grid: std::collections::HashMap::new(),
             terminal_cursor: (0, 0),
             terminal_cursor_visible: true, // Default to visible
-            terminal_size: (DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS),
-            pty_channels: None, // Will be set when WebSocket connects
+            pty_channels: None,            // Will be set when WebSocket connects
             has_received_keyframe: Default::default(), // false
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),
@@ -191,20 +191,38 @@ impl SessionTui {
         format!("http://localhost:8765/session/{}", self.session_id)
     }
 
+    /// Create terminal area with standard calculation (single source of truth)
+    fn create_terminal_area(width: u16, height: u16) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width,
+            height: height.saturating_sub(STATUS_BAR_HEIGHT),
+        }
+    }
+
+    /// Get terminal area for PTY sizing from current terminal
+    fn get_pty_terminal_area(&self) -> Result<Rect> {
+        let terminal_size = self.terminal.size()?;
+        Ok(Self::create_terminal_area(
+            terminal_size.width,
+            terminal_size.height,
+        ))
+    }
 
     pub async fn connect_websocket(&mut self) -> Result<()> {
         use crate::client::http::CodeMuxClient;
-        
+
         // Create client and connect to WebSocket
         let client = CodeMuxClient::new("http://localhost:8765".to_string());
         let session_connection = client.connect_to_session(&self.session_id).await?;
-        
+
         // Convert SessionConnection to PtyChannels
         let pty_channels = session_connection.into_pty_channels();
-        
+
         // Store the channels
         self.set_pty_channels(pty_channels);
-        
+
         Ok(())
     }
 
@@ -212,7 +230,8 @@ impl SessionTui {
         // Dropping pty_channels will close the WebSocket connection
         self.pty_channels = None;
         self.has_received_keyframe = false; // Reset keyframe state
-        self.status_message = "WebSocket disconnected - Press Ctrl+T for interactive mode".to_string();
+        self.status_message =
+            "WebSocket disconnected - Press Ctrl+T for interactive mode".to_string();
     }
 
     fn get_pty_channels(&self) -> Result<&PtyChannels> {
@@ -243,7 +262,6 @@ impl SessionTui {
                     .collect();
                 self.terminal_cursor = cursor;
                 self.terminal_cursor_visible = cursor_visible;
-                self.terminal_size = (size.rows, size.cols);
                 self.mark_full_redraw();
 
                 // Mark that we've received our first keyframe
@@ -286,53 +304,6 @@ impl SessionTui {
                 true // Diff processed
             }
         }
-    }
-
-    // Old VT100-based methods removed - now using grid updates from PTY session
-
-    pub async fn initial_pty_resize(&mut self) -> Result<()> {
-        // Get current terminal size and resize PTY to match
-        let terminal_area = match self.terminal.size() {
-            Ok(size) => Rect {
-                x: 0,
-                y: 0,
-                width: size.width,
-                height: size.height,
-            },
-            Err(e) => {
-                // Fallback for headless environments (CI, containers, etc.)
-                // Check for environment variables first
-                let width = std::env::var("COLUMNS")
-                    .ok()
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(DEFAULT_PTY_COLS);
-                let height = std::env::var("LINES")
-                    .ok()
-                    .and_then(|s| s.parse::<u16>().ok())
-                    .unwrap_or(DEFAULT_PTY_ROWS);
-
-                tracing::warn!(
-                    "Could not detect terminal size: {}. Using fallback size {}x{}",
-                    e,
-                    width,
-                    height
-                );
-
-                Rect {
-                    x: 0,
-                    y: 0,
-                    width,
-                    height,
-                }
-            }
-        };
-
-        self.resize_pty_to_match_tui(terminal_area).await;
-
-        // Update terminal size tracking
-        self.terminal_size = (terminal_area.height, terminal_area.width);
-
-        Ok(())
     }
 
     pub fn add_system_log(&mut self, log_entry: LogEntry) {
@@ -460,11 +431,6 @@ impl SessionTui {
         self.interactive_mode = false;
         self.status_message = "Ready - Press Ctrl+T for interactive mode".to_string();
 
-        // Perform initial PTY resize to match current terminal size
-        if let Err(e) = self.initial_pty_resize().await {
-            tracing::warn!("Failed to perform initial PTY resize: {}", e);
-        }
-
         loop {
             let should_quit = if self.interactive_mode {
                 self.run_interactive_mode(&session_info, &mut log_rx).await
@@ -555,16 +521,8 @@ impl SessionTui {
                                     self.interactive_mode = true;
                                     self.status_message = "Interactive mode ON - Direct PTY input (Ctrl+T to toggle off)".to_string();
 
-                                    // Resize PTY for interactive mode
-                                    let terminal_size = self.terminal.size()?;
-                                    let terminal_area = Rect {
-                                        x: 0,
-                                        y: 1, // Account for status bar
-                                        width: terminal_size.width,
-                                        height: terminal_size.height.saturating_sub(1),
-                                    };
-                                    self.terminal_size = (terminal_area.height, terminal_area.width);
-                                    self.resize_pty_to_match_tui(terminal_area).await;
+                                    // Get terminal area for PTY sizing
+                                    // Don't resize PTY in monitoring mode - only in interactive mode
 
                                     // Re-render and exit to switch modes
                                     let uptime = self.start_time.elapsed();
@@ -581,15 +539,7 @@ impl SessionTui {
                                         self.status_message = "Switching to interactive mode...".to_string();
 
                                         // Get proper terminal dimensions for interactive mode
-                                        let terminal_size = self.terminal.size()?;
-                                        let terminal_area = Rect {
-                                            x: 0,
-                                            y: 1, // Account for status bar
-                                            width: terminal_size.width,
-                                            height: terminal_size.height.saturating_sub(1),
-                                        };
-                                        self.terminal_size = (terminal_area.height, terminal_area.width);
-                                        self.resize_pty_to_match_tui(terminal_area).await;
+                                        // Don't resize PTY in monitoring mode - only in interactive mode
 
                                         let uptime = self.start_time.elapsed();
                                         self.draw(session_info, uptime)?;
@@ -681,6 +631,10 @@ impl SessionTui {
                 Ok(()) => {
                     tracing::info!("WebSocket connected successfully");
                     self.status_message = "Connected - Interactive mode active".to_string();
+
+                    // Send initial resize to match current terminal size
+                    let terminal_area = self.get_pty_terminal_area()?;
+                    self.resize_pty_to_match_tui(terminal_area).await;
                 }
                 Err(e) => {
                     tracing::error!("Failed to connect WebSocket: {}", e);
@@ -699,7 +653,7 @@ impl SessionTui {
                     return Ok(false);
                 }
             };
-            
+
             channels.grid_tx.clone()
         };
 
@@ -724,11 +678,9 @@ impl SessionTui {
         // Debug the initial terminal state
         let terminal_size = self.terminal.size()?;
         tracing::debug!(
-            "Starting interactive mode loop - Terminal: {}x{}, Grid size: {}x{}",
+            "Starting interactive mode loop - Terminal: {}x{}",
             terminal_size.width,
-            terminal_size.height,
-            self.terminal_size.1,
-            self.terminal_size.0
+            terminal_size.height
         );
 
         tracing::debug!("About to enter interactive mode main loop");
@@ -790,13 +742,7 @@ impl SessionTui {
                             tracing::debug!("Terminal resized to {}x{} in interactive mode", width, height);
 
                             // Update terminal size tracking
-                            let terminal_area = Rect {
-                                x: 0,
-                                y: 1, // Account for status bar
-                                width,
-                                height: height.saturating_sub(1),
-                            };
-                            self.terminal_size = (terminal_area.height, terminal_area.width);
+                            let terminal_area = Self::create_terminal_area(width, height);
                             self.mark_full_redraw(); // Terminal resize requires full redraw
 
                             // Resize PTY to match new terminal size
@@ -874,27 +820,16 @@ impl SessionTui {
     fn draw(&mut self, session_info: &SessionInfo, uptime: Duration) -> Result<()> {
         // Pre-compute terminal size and update tracking if in interactive mode
         let terminal_size = self.terminal.size()?;
-        if self.interactive_mode {
-            let terminal_area_height = terminal_size.height.saturating_sub(1); // Account for status bar
-            let terminal_area_width = terminal_size.width;
-
-            // Update our terminal size tracking if it changed
-            if self.terminal_size != (terminal_area_height, terminal_area_width) {
-                self.terminal_size = (terminal_area_height, terminal_area_width);
-                tracing::debug!(
-                    "Updated terminal size to {}x{}",
-                    terminal_area_height,
-                    terminal_area_width
-                );
-            }
-        }
 
         // Extract needed data before the draw closure to avoid borrowing issues
         let interactive_mode = self.interactive_mode;
         let terminal_grid = self.terminal_grid.clone();
         let terminal_cursor = self.terminal_cursor;
         let cursor_visible = self.terminal_cursor_visible;
-        let terminal_grid_size = self.terminal_size;
+        let terminal_grid_size = (
+            terminal_size.height.saturating_sub(STATUS_BAR_HEIGHT),
+            terminal_size.width,
+        );
         let system_logs = self.system_logs.clone();
 
         self.terminal.draw(move |f| {

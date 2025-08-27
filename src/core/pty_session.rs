@@ -170,8 +170,8 @@ pub enum GridUpdateMessage {
     Keyframe {
         size: SerializablePtySize,
         cells: Vec<((u16, u16), GridCell)>, // (row, col) -> cell
-        cursor: (u16, u16),                   // (row, col)
-        cursor_visible: bool,                 // whether cursor is visible
+        cursor: (u16, u16),                 // (row, col)
+        cursor_visible: bool,               // whether cursor is visible
         timestamp: std::time::SystemTime,
     },
     /// Incremental changes (sent to existing clients)
@@ -1243,4 +1243,3 @@ pub struct SessionInfo {
     pub agent: String,
     pub args: Vec<String>,
 }
-

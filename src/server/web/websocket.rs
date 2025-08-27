@@ -217,7 +217,12 @@ async fn handle_socket(
                                 ClientMessage::Resize { rows, cols } => {
                                     tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
                                     // Send resize control message to PTY
-                                    // TODO: Handle resize if needed
+                                    let resize_msg = crate::core::pty_session::PtyControlMessage::Resize { rows, cols };
+                                    if let Err(e) = pty_channels.control_tx.send(resize_msg) {
+                                        tracing::warn!("Failed to send resize to PTY session {}: {}", session_id, e);
+                                    } else {
+                                        tracing::debug!("Sent resize {}x{} to PTY session {}", cols, rows, session_id);
+                                    }
                                 }
                             }
                         } else {
