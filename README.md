@@ -1,6 +1,6 @@
 # CodeMux
 
-A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with enhanced web UI support. Unlike generic terminal multiplexers, CodeMux is optimized for AI code agents and provides rich web interfaces for CLI interactions.
+A specialized terminal multiplexer for AI coding CLIs (claude, gemini, aider, etc.) with cross-platform React Native UI. Unlike generic terminal multiplexers, CodeMux is optimized for AI code agents and provides native mobile and web interfaces for CLI interactions.
 
 ## Features
 
