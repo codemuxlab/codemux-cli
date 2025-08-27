@@ -1,11 +1,9 @@
 use anyhow::{anyhow, Result};
-use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-use crate::config::Config;
-use crate::pty_session::{PtyChannels, PtySession};
+use crate::core::{Config, SessionInfo, ProjectInfo, pty_session::{PtyChannels, PtySession}};
 
 pub struct SessionManager {
     config: Config,
@@ -134,27 +132,4 @@ impl SessionManager {
     pub fn get_session_channels(&self, session_id: &str) -> Option<&PtyChannels> {
         self.sessions.get(session_id).map(|(_, channels)| channels)
     }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub id: String,
-    pub agent: String,
-    pub project: Option<String>,
-    pub status: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ProjectInfo {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ProjectWithSessions {
-    pub id: String,
-    pub name: String,
-    pub path: String,
-    pub sessions: Vec<SessionInfo>,
 }

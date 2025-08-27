@@ -19,9 +19,10 @@ use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::embedded_assets::ReactAssets;
-use crate::pty_session::PtyInputMessage;
-use crate::session::{ProjectInfo, ProjectWithSessions, SessionInfo, SessionManager};
+use crate::assets::embedded::ReactAssets;
+use crate::core::pty_session::PtyInputMessage;
+use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
+use crate::server::SessionManager;
 
 #[derive(Clone)]
 pub struct AppState {

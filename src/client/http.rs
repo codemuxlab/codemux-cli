@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::config::Config;
-use crate::session::{SessionInfo, ProjectInfo, ProjectWithSessions};
-use crate::pty_session::{PtyInputMessage, PtyOutputMessage, GridUpdateMessage};
+use crate::core::{Config, SessionInfo, ProjectInfo, ProjectWithSessions};
+use crate::core::pty_session::{PtyInputMessage, PtyOutputMessage, GridUpdateMessage};
 
 #[derive(Debug, Clone)]
 pub struct CodeMuxClient {

@@ -1,5 +1,5 @@
-use crate::pty_session::{PtyChannels, PtyInputMessage, TerminalColor};
-use crate::tui_writer::{LogEntry, LogLevel};
+use crate::core::pty_session::{PtyChannels, PtyInputMessage, TerminalColor};
+use crate::utils::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
 use crossterm::{
     event::{
