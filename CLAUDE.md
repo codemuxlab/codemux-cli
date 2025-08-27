@@ -98,9 +98,10 @@ npx expo export         # Export for production
 - **TanStack Query** for API state management and caching
 
 **Linting Requirements**:
-- ALWAYS run `npm run lint` inside the app directory before committing
+- **React Native App**: ALWAYS run `npm run lint` inside the `app/` directory before committing
+- **Website**: ALWAYS run `npm run lint` inside the `website/` directory before committing  
 - Fix all linting errors and warnings before submitting changes
-- Biome is configured for strict TypeScript and React best practices
+- Both projects use Biome for strict TypeScript and React best practices
 - Some unsafe fixes require manual review (run with `--unsafe` flag only if needed)
 
 ## Architecture Components
@@ -203,10 +204,11 @@ When implementing features, consider using:
 ### Quality Assurance
 - **Pre-commit Requirements**:
   1. **Rust**: Run `cargo clippy` and fix all warnings
-  2. **React App**: Run `cd app && npm run lint` and fix all errors/warnings
-  3. **Formatting**: Run `cargo fmt` for Rust code
-  4. **Tests**: Ensure `cargo test` passes
-- **Biome Configuration**: The app uses strict linting rules including:
+  2. **React Native App**: Run `cd app && npm run lint` and fix all errors/warnings
+  3. **Website**: Run `cd website && npm run lint` and fix all errors/warnings
+  4. **Formatting**: Run `cargo fmt` for Rust code
+  5. **Tests**: Ensure `cargo test` passes
+- **Biome Configuration**: Both the app and website use strict linting rules including:
   - No unused imports or variables
   - Proper TypeScript typing (avoid `any`)
   - React best practices (exhaustive dependencies, key props)

@@ -24,6 +24,9 @@ npm install
 
 # Run development server
 npm run dev
+
+# IMPORTANT: Always lint before committing
+npm run lint
 ```
 
 Open [http://localhost:3000](http://localhost:3000) to view the site.

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "motion/react";
-import { RefObject, useEffect, useId, useState } from "react";
+import { type RefObject, useEffect, useId, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -92,11 +92,9 @@ export const AnimatedBeam: React.FC<AnimatedBeamProps> = ({
     };
 
     // Initialize ResizeObserver
-    const resizeObserver = new ResizeObserver((entries) => {
+    const resizeObserver = new ResizeObserver(() => {
       // For all entries, recalculate the path
-      for (let entry of entries) {
-        updatePath();
-      }
+      updatePath();
     });
 
     // Observe the container element
@@ -133,6 +131,7 @@ export const AnimatedBeam: React.FC<AnimatedBeamProps> = ({
         className,
       )}
       viewBox={`0 0 ${svgDimensions.width} ${svgDimensions.height}`}
+      aria-hidden="true"
     >
       <path
         d={pathD}
