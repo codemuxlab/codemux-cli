@@ -1,5 +1,8 @@
-use crate::core::pty_session::{PtyChannels, PtyInputMessage, TerminalColor, GridUpdateMessage, PtyControlMessage, PtyInput, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS};
 use crate::core::pty_session::GridCell as PtyGridCell;
+use crate::core::pty_session::{
+    GridUpdateMessage, PtyChannels, PtyControlMessage, PtyInput, PtyInputMessage, TerminalColor,
+    DEFAULT_PTY_COLS, DEFAULT_PTY_ROWS,
+};
 use crate::utils::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
 use crossterm::{
@@ -71,26 +74,24 @@ impl From<PtyGridCell> for GridCell {
 fn terminal_color_to_string(color: &TerminalColor) -> String {
     match color {
         TerminalColor::Default => "default".to_string(),
-        TerminalColor::Indexed(idx) => {
-            match *idx {
-                0 => "black".to_string(),
-                1 => "red".to_string(),
-                2 => "green".to_string(),
-                3 => "yellow".to_string(),
-                4 => "blue".to_string(),
-                5 => "magenta".to_string(),
-                6 => "cyan".to_string(),
-                7 => "white".to_string(),
-                8 => "darkgray".to_string(),
-                9 => "lightred".to_string(),
-                10 => "lightgreen".to_string(),
-                11 => "lightyellow".to_string(),
-                12 => "lightblue".to_string(),
-                13 => "lightmagenta".to_string(),
-                14 => "lightcyan".to_string(),
-                15 => "gray".to_string(),
-                _ => format!("indexed-{}", idx),
-            }
+        TerminalColor::Indexed(idx) => match *idx {
+            0 => "black".to_string(),
+            1 => "red".to_string(),
+            2 => "green".to_string(),
+            3 => "yellow".to_string(),
+            4 => "blue".to_string(),
+            5 => "magenta".to_string(),
+            6 => "cyan".to_string(),
+            7 => "white".to_string(),
+            8 => "darkgray".to_string(),
+            9 => "lightred".to_string(),
+            10 => "lightgreen".to_string(),
+            11 => "lightyellow".to_string(),
+            12 => "lightblue".to_string(),
+            13 => "lightmagenta".to_string(),
+            14 => "lightcyan".to_string(),
+            15 => "gray".to_string(),
+            _ => format!("indexed-{}", idx),
         },
         TerminalColor::Palette(idx) => format!("palette-{}", idx),
         TerminalColor::Rgb { r, g, b } => format!("#{:02x}{:02x}{:02x}", r, g, b),
@@ -135,6 +136,8 @@ pub struct SessionTui {
     terminal_size: (u16, u16),
     // New channel-based PTY communication
     pty_channels: PtyChannels,
+    // Keyframe state tracking
+    has_received_keyframe: bool,
     // Incremental rendering state
     needs_redraw: bool,
     dirty_cells: std::collections::HashSet<(u16, u16)>,
@@ -171,12 +174,80 @@ impl SessionTui {
             terminal_cursor_visible: true, // Default to visible
             terminal_size: (DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS),
             pty_channels,
+            has_received_keyframe: Default::default(), // false
             needs_redraw: true,
             dirty_cells: std::collections::HashSet::new(),
             cursor_dirty: false,
             last_render_time: std::time::Instant::now(),
             web_url,
         })
+    }
+
+    /// Centralized handler for GridUpdateMessage with keyframe state tracking
+    fn handle_grid_update(&mut self, update: GridUpdateMessage) -> bool {
+        match update {
+            GridUpdateMessage::Keyframe {
+                size,
+                cells,
+                cursor,
+                cursor_visible,
+                ..
+            } => {
+                tracing::debug!(
+                    "Processing keyframe: {} cells, size {}x{}, cursor ({}, {}), first_keyframe: {}",
+                    cells.len(), size.cols, size.rows, cursor.0, cursor.1, !self.has_received_keyframe
+                );
+
+                // Update terminal state from keyframe and mark for full redraw
+                self.terminal_grid = cells
+                    .into_iter()
+                    .map(|((row, col), pty_cell)| ((row, col), GridCell::from(pty_cell)))
+                    .collect();
+                self.terminal_cursor = cursor;
+                self.terminal_cursor_visible = cursor_visible;
+                self.terminal_size = (size.rows, size.cols);
+                self.mark_full_redraw();
+
+                // Mark that we've received our first keyframe
+                if !self.has_received_keyframe {
+                    self.has_received_keyframe = true;
+                    tracing::info!("First keyframe received - terminal state initialized");
+                }
+
+                true // Keyframe processed
+            }
+            GridUpdateMessage::Diff {
+                changes, cursor, ..
+            } => {
+                // Drop diff messages if we haven't received initial keyframe
+                if !self.has_received_keyframe {
+                    tracing::debug!("Dropping diff update - no initial keyframe received yet");
+                    return false;
+                }
+
+                tracing::debug!("Processing diff: {} changes", changes.len());
+
+                // Collect dirty cell positions for incremental rendering
+                let dirty_positions: Vec<(u16, u16)> =
+                    changes.iter().map(|(row, col, _)| (*row, *col)).collect();
+
+                // Apply changes to terminal grid
+                for (row, col, cell) in changes {
+                    self.terminal_grid.insert((row, col), GridCell::from(cell));
+                }
+
+                // Mark changed cells as dirty for incremental rendering
+                self.mark_cells_dirty(&dirty_positions);
+
+                // Update cursor if specified
+                if let Some(new_cursor) = cursor {
+                    self.mark_cursor_dirty(self.terminal_cursor, new_cursor);
+                    self.terminal_cursor = new_cursor;
+                }
+
+                true // Diff processed
+            }
+        }
     }
 
     // Old VT100-based methods removed - now using grid updates from PTY session
@@ -563,73 +634,7 @@ impl SessionTui {
         match keyframe_result {
             Ok(Ok(keyframe)) => {
                 tracing::debug!("Received keyframe for TUI interactive mode");
-                // Apply keyframe to TUI terminal state
-                match keyframe {
-                    GridUpdateMessage::Keyframe {
-                        size,
-                        cells,
-                        cursor,
-                        cursor_visible,
-                        ..
-                    } => {
-                        // Update terminal state from keyframe and mark for full redraw
-                        self.terminal_grid = cells.into_iter()
-                            .map(|((row, col), pty_cell)| ((row, col), GridCell::from(pty_cell)))
-                            .collect();
-                        self.terminal_cursor = cursor;
-                        self.terminal_cursor_visible = cursor_visible;
-                        self.terminal_size = (size.rows, size.cols);
-                        self.mark_full_redraw();
-
-                        // Debug: Check if we have any visible content
-                        let mut non_empty_cells = 0;
-                        let mut sample_content = String::new();
-                        let mut first_10_cells = Vec::new();
-
-                        // Check first few rows for content
-                        for row in 0..5.min(size.rows) {
-                            for col in 0..20.min(size.cols) {
-                                if let Some(cell) = self.terminal_grid.get(&(row, col)) {
-                                    // Collect first 10 cells for debugging
-                                    if first_10_cells.len() < 10 {
-                                        first_10_cells.push(format!(
-                                            "({},{})='{}' ",
-                                            row,
-                                            col,
-                                            cell.char.to_string().replace('\n', "\\n").replace('\r', "\\r")
-                                        ));
-                                    }
-
-                                    if cell.char != ' ' {
-                                        non_empty_cells += 1;
-                                        if sample_content.len() < 50 {
-                                            sample_content.push(cell.char);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        tracing::debug!(
-                                "Applied keyframe: {} total cells, {} non-empty in first 5 rows, cursor=({},{}), size={}x{}",
-                                self.terminal_grid.len(),
-                                non_empty_cells,
-                                cursor.0,
-                                cursor.1,
-                                size.rows,
-                                size.cols
-                            );
-
-                        tracing::debug!("First 10 cells: {}", first_10_cells.join(""));
-                        tracing::debug!(
-                            "Sample visible content: '{}'",
-                            sample_content.replace('\n', "\\n")
-                        );
-                    }
-                    GridUpdateMessage::Diff { .. } => {
-                        tracing::warn!("Received diff instead of keyframe (unexpected)");
-                    }
-                }
+                self.handle_grid_update(keyframe);
             }
             Ok(Err(e)) => {
                 tracing::warn!("Failed to request keyframe for TUI: {}", e);
@@ -766,52 +771,11 @@ impl SessionTui {
                         while updates_processed < max_updates_per_cycle {
                             match grid_update_stream.try_recv() {
                                 Ok(update) => {
-                                    // Apply grid update to TUI terminal state
-                                    match update {
-                                        GridUpdateMessage::Keyframe { size, cells, cursor, .. } => {
-                                            // Keyframes require full redraw
-                                            self.terminal_grid = cells.into_iter()
-                                                .map(|((row, col), pty_cell)| ((row, col), GridCell::from(pty_cell)))
-                                                .collect();
-                                            self.terminal_cursor = cursor;
-                                            self.terminal_size = (size.rows, size.cols);
-                                            self.mark_full_redraw();
-
-                                            if updates_processed == 0 {
-                                                tracing::debug!("GRID KEYFRAME - {} cells, cursor: ({}, {}), size: {}x{}",
-                                                    self.terminal_grid.len(), cursor.0, cursor.1, size.rows, size.cols);
-                                            }
-                                        }
-                                        GridUpdateMessage::Diff { changes, cursor, .. } => {
-                                            let num_changes = changes.len();
-
-                                            // Collect dirty cell positions for incremental rendering
-                                            let dirty_positions: Vec<(u16, u16)> = changes.iter()
-                                                .map(|(row, col, _)| (*row, *col))
-                                                .collect();
-
-                                            // Apply changes to terminal grid
-                                            for (row, col, cell) in changes {
-                                                self.terminal_grid.insert((row, col), GridCell::from(cell));
-                                            }
-
-                                            // Mark changed cells as dirty for incremental rendering
-                                            self.mark_cells_dirty(&dirty_positions);
-
-                                            // Update cursor if specified
-                                            if let Some(new_cursor) = cursor {
-                                                self.mark_cursor_dirty(self.terminal_cursor, new_cursor);
-                                                self.terminal_cursor = new_cursor;
-                                            }
-
-                                            if updates_processed == 0 {
-                                                tracing::debug!("GRID DIFF - {} changes, cursor: ({}, {}), marked {} cells dirty",
-                                                    num_changes, self.terminal_cursor.0, self.terminal_cursor.1, dirty_positions.len());
-                                            }
-                                        }
+                                    // Process grid update using centralized handler
+                                    if self.handle_grid_update(update) {
+                                        updates_processed += 1;
                                     }
-
-                                    updates_processed += 1;
+                                    // If handle_grid_update returns false, update was dropped (e.g., diff before keyframe)
                                 }
                                 Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break, // No more data available
                                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
@@ -1080,20 +1044,19 @@ fn render_terminal_from_grid(
     lines
 }
 
-
 /// Convert color string to ratatui Color
 fn string_color_to_ratatui(color_str: &str) -> Option<Color> {
     if color_str.starts_with('#') && color_str.len() == 7 {
         // Parse hex color like #ff0000
         if let (Ok(r), Ok(g), Ok(b)) = (
             u8::from_str_radix(&color_str[1..3], 16),
-            u8::from_str_radix(&color_str[3..5], 16), 
+            u8::from_str_radix(&color_str[3..5], 16),
             u8::from_str_radix(&color_str[5..7], 16),
         ) {
             return Some(Color::Rgb(r, g, b));
         }
     }
-    
+
     // Try parsing named colors
     match color_str.to_lowercase().as_str() {
         "black" => Some(Color::Black),

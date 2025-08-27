@@ -70,16 +70,28 @@ async fn main() -> Result<()> {
                     log_path: log_path.clone(),
                 };
                 
+                let env_filter = if std::env::var("RUST_LOG").is_ok() {
+                    EnvFilter::from_default_env()
+                } else {
+                    EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap())
+                };
+                
                 tracing_subscriber::fmt()
                     .with_writer(multi_writer)
-                    .with_env_filter(EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap()))
+                    .with_env_filter(env_filter)
                     .with_ansi(false)
                     .init();
             } else {
                 // Just TUI writer, no file logging
+                let env_filter = if std::env::var("RUST_LOG").is_ok() {
+                    EnvFilter::from_default_env()
+                } else {
+                    EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap())
+                };
+                
                 tracing_subscriber::fmt()
                     .with_writer(tui_writer)
-                    .with_env_filter(EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap()))
+                    .with_env_filter(env_filter)
                     .with_ansi(false)
                     .init();
             }
@@ -90,9 +102,15 @@ async fn main() -> Result<()> {
             // For attach command (TUI mode but no logfile option)
             let (tui_writer, log_rx) = TuiWriter::new();
             
+            let env_filter = if std::env::var("RUST_LOG").is_ok() {
+                EnvFilter::from_default_env()
+            } else {
+                EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap())
+            };
+            
             tracing_subscriber::fmt()
                 .with_writer(tui_writer)
-                .with_env_filter(EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap()))
+                .with_env_filter(env_filter)
                 .with_ansi(false)
                 .init();
                 
@@ -100,9 +118,15 @@ async fn main() -> Result<()> {
         }
         _ => {
             // For non-TUI commands (server, list, etc.), use stderr normally
+            let env_filter = if std::env::var("RUST_LOG").is_ok() {
+                EnvFilter::from_default_env()
+            } else {
+                EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap())
+            };
+            
             tracing_subscriber::fmt()
                 .with_writer(std::io::stderr)
-                .with_env_filter(EnvFilter::from_default_env().add_directive("codemux=info".parse().unwrap()))
+                .with_env_filter(env_filter)
                 .init();
                 
             // Create dummy channel for consistency

@@ -169,7 +169,16 @@ async fn handle_socket(
             tracing::debug!("Received keyframe for new WebSocket client");
             let keyframe_ws_msg = ServerMessage::Grid { data: keyframe };
             if let Ok(keyframe_str) = serde_json::to_string(&keyframe_ws_msg) {
-                tracing::debug!("WebSocket sending initial keyframe: {} chars", keyframe_str.len());
+                // Test that we can deserialize what we're about to send
+                match serde_json::from_str::<ServerMessage>(&keyframe_str) {
+                    Ok(_) => {
+                        tracing::debug!("WebSocket sending initial keyframe: {} chars (verified deserializable)", keyframe_str.len());
+                    }
+                    Err(e) => {
+                        tracing::error!("Initial keyframe cannot be deserialized: {}", e);
+                        tracing::error!("Message content: {}", keyframe_str);
+                    }
+                }
                 if socket
                     .send(Message::Text(keyframe_str))
                     .await
@@ -194,7 +203,16 @@ async fn handle_socket(
                     Ok(update) => {
                         let ws_msg = ServerMessage::Grid { data: update };
                         if let Ok(grid_msg) = serde_json::to_string(&ws_msg) {
-                            tracing::debug!("WebSocket sending grid update: {} chars", grid_msg.len());
+                            // Test that we can deserialize what we're about to send
+                            match serde_json::from_str::<ServerMessage>(&grid_msg) {
+                                Ok(_) => {
+                                    tracing::debug!("WebSocket sending grid update: {} chars (verified deserializable)", grid_msg.len());
+                                }
+                                Err(e) => {
+                                    tracing::error!("Grid update message cannot be deserialized: {}", e);
+                                    tracing::error!("Message content: {}", grid_msg);
+                                }
+                            }
                             if socket.send(Message::Text(grid_msg)).await.is_err() {
                                 tracing::error!("Failed to send grid update via WebSocket");
                                 break;
@@ -272,7 +290,7 @@ async fn handle_socket(
                                     // TODO: Handle resize if needed
                                 }
                                 ClientMessage::RequestKeyframe => {
-                                    tracing::debug!("WebSocket received keyframe request");
+                                    tracing::debug!("WebSocket received keyframe request for session: {}", session_id);
                                     // Send current keyframe
                                     match pty_channels.request_keyframe().await {
                                         Ok(keyframe) => {

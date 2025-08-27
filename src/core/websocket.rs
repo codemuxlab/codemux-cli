@@ -1,5 +1,5 @@
+use super::{GridUpdateMessage, PtyInputMessage, PtyOutputMessage};
 use serde::{Deserialize, Serialize};
-use super::{PtyInputMessage, PtyOutputMessage, GridUpdateMessage};
 
 /// Messages sent from client to server
 #[derive(Debug, Serialize, Deserialize)]

@@ -318,9 +318,9 @@ impl SessionManagerActor {
             None
         };
 
-        tracing::debug!("Creating PTY session with ID: {}, agent: {}", session_id, agent);
+        tracing::debug!("SessionManager - Creating PTY session with ID: {}, agent: {}", session_id, agent);
         let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args)?;
-        tracing::debug!("PTY session created, spawning start task");
+        tracing::debug!("SessionManager - PTY session created, channels available, spawning start task");
         
         // Clone channels for storage
         let channels_clone = channels.clone();
@@ -328,11 +328,11 @@ impl SessionManagerActor {
         // Spawn the PTY session start task to actually begin reading from the PTY
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
-            tracing::info!("Starting PTY session tasks for {}", session_id_clone);
+            tracing::info!("SessionManager - Starting PTY session tasks for {}", session_id_clone);
             if let Err(e) = session.start().await {
-                tracing::error!("PTY session {} failed: {}", session_id_clone, e);
+                tracing::error!("SessionManager - PTY session {} failed: {}", session_id_clone, e);
             }
-            tracing::info!("PTY session {} completed", session_id_clone);
+            tracing::info!("SessionManager - PTY session {} completed", session_id_clone);
         });
         
         // Store the session state
@@ -343,7 +343,7 @@ impl SessionManagerActor {
             project_id: resolved_project_id.clone(),
         };
         self.sessions.insert(session_id.clone(), session_state);
-        tracing::info!("Session {} stored successfully in SessionManager", session_id);
+        tracing::info!("SessionManager - Session {} stored successfully, channels ready for use", session_id);
 
         Ok(SessionInfo {
             id: session_id,
@@ -363,12 +363,15 @@ impl SessionManagerActor {
     }
     
     fn get_session_channels(&self, session_id: &str) -> Option<PtyChannels> {
-        tracing::debug!("Looking for session channels: {}, total sessions: {}", session_id, self.sessions.len());
+        tracing::debug!("SessionManager - Looking for session channels: {}, total sessions: {}", session_id, self.sessions.len());
         let result = self.sessions.get(session_id).map(|state| state.channels.clone());
         if result.is_some() {
-            tracing::debug!("Found channels for session: {}", session_id);
+            tracing::debug!("SessionManager - Found channels for session: {}", session_id);
         } else {
-            tracing::warn!("No channels found for session: {}", session_id);
+            tracing::warn!("SessionManager - No channels found for session: {}", session_id);
+            // Log all available session IDs for debugging
+            let session_ids: Vec<_> = self.sessions.keys().collect();
+            tracing::debug!("SessionManager - Available session IDs: {:?}", session_ids);
         }
         result
     }

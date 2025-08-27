@@ -119,17 +119,17 @@ impl From<PtySize> for SerializablePtySize {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GridCell {
     pub char: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub fg_color: Option<TerminalColor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bg_color: Option<TerminalColor>,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub bold: bool,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub italic: bool,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub underline: bool,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub reverse: bool,
 }
 
@@ -198,16 +198,26 @@ impl PtyChannels {
     pub async fn request_keyframe(
         &self,
     ) -> Result<GridUpdateMessage, Box<dyn std::error::Error + Send + Sync>> {
+        tracing::debug!("PtyChannels::request_keyframe - Creating oneshot channel");
         let (tx, rx) = tokio::sync::oneshot::channel();
 
+        tracing::debug!("PtyChannels::request_keyframe - Sending control message");
         self.control_tx
             .send(PtyControlMessage::RequestKeyframe { response_tx: tx })
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(|e| {
+                tracing::error!("PtyChannels::request_keyframe - Failed to send control message: {}", e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
 
+        tracing::debug!("PtyChannels::request_keyframe - Waiting for response");
         let keyframe = rx
             .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(|e| {
+                tracing::error!("PtyChannels::request_keyframe - Failed to receive response: {}", e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
 
+        tracing::debug!("PtyChannels::request_keyframe - Received keyframe successfully");
         Ok(keyframe)
     }
 }
@@ -723,8 +733,10 @@ impl PtySession {
         let control_cursor_visible = cursor_visible.clone();
 
         let control_task = tokio::spawn(async move {
+            tracing::info!("PTY Control task - Starting control message loop");
             let mut control_rx = control_rx;
             while let Some(msg) = control_rx.recv().await {
+                tracing::debug!("PTY Control task - Received control message: {:?}", std::mem::discriminant(&msg));
                 match msg {
                     PtyControlMessage::Resize { rows, cols } => {
                         tracing::debug!("Processing resize request to {}x{}", cols, rows);
@@ -766,7 +778,7 @@ impl PtySession {
                         break;
                     }
                     PtyControlMessage::RequestKeyframe { response_tx } => {
-                        tracing::debug!("Keyframe requested by specific client");
+                        tracing::debug!("Control task - Keyframe requested by client");
                         let keyframe = Self::generate_keyframe(
                             &control_vt_parser,
                             &control_cursor_pos,
@@ -775,15 +787,19 @@ impl PtySession {
                         )
                         .await;
 
+                        tracing::debug!("Control task - Generated keyframe, sending response");
                         // Send keyframe directly to the requesting client
                         if response_tx.send(keyframe).is_err() {
                             tracing::warn!(
-                                "Failed to send keyframe to requesting client (receiver dropped)"
+                                "Control task - Failed to send keyframe to requesting client (receiver dropped)"
                             );
+                        } else {
+                            tracing::debug!("Control task - Keyframe sent successfully to client");
                         }
                     }
                 }
             }
+            tracing::info!("PTY Control task - Exiting control message loop (channel closed)");
         });
 
         // Note: Automatic keyframes removed - keyframes are only sent on client request

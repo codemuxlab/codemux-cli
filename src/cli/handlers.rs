@@ -137,6 +137,11 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
         let mut cmd = tokio::process::Command::new(&current_exe);
         cmd.args(&["server", "start"]);
         
+        // Pass through RUST_LOG environment variable
+        if let Ok(rust_log) = std::env::var("RUST_LOG") {
+            cmd.env("RUST_LOG", rust_log);
+        }
+        
         // Spawn the server process
         let child = cmd.spawn()
             .map_err(|e| anyhow::anyhow!("Failed to spawn server process: {}", e))?;
@@ -348,6 +353,11 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
                 let current_exe = std::env::current_exe()?;
                 let mut cmd = tokio::process::Command::new(&current_exe);
                 cmd.args(&["server", "start", "--port", &port.to_string()]);
+                
+                // Pass through RUST_LOG environment variable
+                if let Ok(rust_log) = std::env::var("RUST_LOG") {
+                    cmd.env("RUST_LOG", rust_log);
+                }
                 
                 let child = cmd.spawn()
                     .map_err(|e| anyhow::anyhow!("Failed to spawn detached server: {}", e))?;
