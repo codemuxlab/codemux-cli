@@ -255,6 +255,7 @@ impl SessionTui {
                     "Processing keyframe: {} cells, size {}x{}, cursor ({}, {}), first_keyframe: {}",
                     cells.len(), size.cols, size.rows, cursor.0, cursor.1, !self.has_received_keyframe
                 );
+                
 
                 // Update terminal state from keyframe and mark for full redraw
                 self.terminal_grid = cells
@@ -934,8 +935,8 @@ impl SessionTui {
                 let grid_dimensions = calculate_grid_dimensions(&terminal_grid);
                 let terminal_content = render_terminal_from_grid(&terminal_grid, grid_dimensions, terminal_cursor, cursor_visible, terminal_area.height, terminal_area.width);
                 let terminal_widget = Paragraph::new(terminal_content)
-                    .block(Block::default().borders(Borders::NONE))
-                    .wrap(ratatui::widgets::Wrap { trim: false });
+                    .block(Block::default().borders(Borders::NONE));
+                    // No wrapping - each line should be rendered exactly as provided
                 f.render_widget(terminal_widget, terminal_area);
 
             } else {
@@ -1016,9 +1017,11 @@ fn render_terminal_from_grid(
 ) -> Vec<ratatui::text::Line> {
     let (grid_rows, grid_cols) = terminal_size;
     let mut lines = Vec::new();
+    
+    let actual_rows = std::cmp::min(grid_rows, display_height);
 
     // Render each row of the terminal - use server PTY size but trim to local display
-    for row in 0..std::cmp::min(grid_rows, display_height) {
+    for row in 0..actual_rows {
         let mut line_spans = Vec::new();
         let mut current_line = String::new();
         let mut current_style = Style::default();
