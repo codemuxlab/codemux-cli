@@ -255,7 +255,6 @@ impl SessionTui {
                     "Processing keyframe: {} cells, size {}x{}, cursor ({}, {}), first_keyframe: {}",
                     cells.len(), size.cols, size.rows, cursor.0, cursor.1, !self.has_received_keyframe
                 );
-                
 
                 // Update terminal state from keyframe and mark for full redraw
                 self.terminal_grid = cells
@@ -784,13 +783,13 @@ impl SessionTui {
                                     kind: crossterm::event::MouseEventKind::ScrollUp,
                                     ..
                                 } => {
-                                    self.send_scroll_to_pty(ScrollDirection::Up, 3).await;
+                                    self.send_scroll_to_pty(ScrollDirection::Up, 1).await;
                                 }
                                 crossterm::event::MouseEvent {
                                     kind: crossterm::event::MouseEventKind::ScrollDown,
                                     ..
                                 } => {
-                                    self.send_scroll_to_pty(ScrollDirection::Down, 3).await;
+                                    self.send_scroll_to_pty(ScrollDirection::Down, 1).await;
                                 }
                                 _ => {
                                     // Ignore other mouse events
@@ -994,14 +993,16 @@ impl SessionTui {
 }
 
 /// Calculate actual grid dimensions from the grid data
-fn calculate_grid_dimensions(terminal_grid: &std::collections::HashMap<(u16, u16), GridCell>) -> (u16, u16) {
+fn calculate_grid_dimensions(
+    terminal_grid: &std::collections::HashMap<(u16, u16), GridCell>,
+) -> (u16, u16) {
     if terminal_grid.is_empty() {
         return (0, 0);
     }
-    
+
     let max_row = terminal_grid.keys().map(|(row, _)| *row).max().unwrap_or(0);
     let max_col = terminal_grid.keys().map(|(_, col)| *col).max().unwrap_or(0);
-    
+
     // Add 1 because grid uses 0-based indexing
     (max_row + 1, max_col + 1)
 }
@@ -1017,7 +1018,7 @@ fn render_terminal_from_grid(
 ) -> Vec<ratatui::text::Line> {
     let (grid_rows, grid_cols) = terminal_size;
     let mut lines = Vec::new();
-    
+
     let actual_rows = std::cmp::min(grid_rows, display_height);
 
     // Render each row of the terminal - use server PTY size but trim to local display

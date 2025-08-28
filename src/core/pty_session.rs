@@ -25,6 +25,37 @@ pub enum PtyControlMessage {
     },
 }
 
+/// Internal control messages for PTY session coordination
+#[derive(Debug)]
+enum InternalControlMessage {
+    TriggerGridUpdate,
+}
+
+/// Throttling for scroll keyframe updates
+struct ScrollThrottle {
+    last_update: std::time::Instant,
+    min_interval: std::time::Duration,
+}
+
+impl ScrollThrottle {
+    fn new() -> Self {
+        Self {
+            last_update: std::time::Instant::now() - std::time::Duration::from_millis(100),
+            min_interval: std::time::Duration::from_millis(50), // 20 FPS max
+        }
+    }
+    
+    fn should_update(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_update) >= self.min_interval {
+            self.last_update = now;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Key event modifiers
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export)]
@@ -391,6 +422,10 @@ impl PtySession {
     pub async fn start(self) -> Result<()> {
         tracing::info!("Starting PTY session tasks for agent: {}", self.agent);
 
+        // Create internal control channel for coordination between tasks
+        let (internal_control_tx, internal_control_rx) =
+            mpsc::unbounded_channel::<InternalControlMessage>();
+
         // Extract all channels and state before creating tasks
         let PtySession {
             pty,
@@ -732,7 +767,7 @@ impl PtySession {
         // Create input handler task
         let input_writer = writer.clone();
         let input_vt_parser = vt_parser.clone();
-        let _input_grid_tx = grid_tx.clone();
+        let input_internal_tx = internal_control_tx.clone();
         let input_task = tokio::spawn(async move {
             let mut input_rx = input_rx;
             while let Some(msg) = input_rx.recv().await {
@@ -782,9 +817,16 @@ impl PtySession {
                         }
 
                         // Trigger a grid update since the view has changed
-                        // Note: We could generate a new GridUpdateMessage here, but it's simpler to
-                        // let the normal processing cycle handle it when new data arrives
-                        tracing::debug!("Scroll event processed, view updated");
+                        if let Err(e) =
+                            input_internal_tx.send(InternalControlMessage::TriggerGridUpdate)
+                        {
+                            tracing::warn!(
+                                "Failed to send internal control message after scroll: {}",
+                                e
+                            );
+                        } else {
+                            tracing::debug!("Scroll event processed, sent trigger to main control");
+                        }
                     }
                 }
             }
@@ -794,6 +836,7 @@ impl PtySession {
         let control_pty = pty.clone();
         let control_current_size = current_size.clone();
         let control_size_tx = size_tx.clone();
+        let control_grid_tx = grid_tx.clone();
         let control_vt_parser = vt_parser.clone();
         let control_cursor_pos = cursor_pos.clone();
         let control_cursor_visible = cursor_visible.clone();
@@ -801,69 +844,106 @@ impl PtySession {
         let control_task = tokio::spawn(async move {
             tracing::info!("PTY Control task - Starting control message loop");
             let mut control_rx = control_rx;
-            while let Some(msg) = control_rx.recv().await {
-                tracing::debug!(
-                    "PTY Control task - Received control message: {:?}",
-                    std::mem::discriminant(&msg)
-                );
-                match msg {
-                    PtyControlMessage::Resize { rows, cols } => {
-                        tracing::debug!("Processing resize request to {}x{}", cols, rows);
+            let mut internal_control_rx = internal_control_rx;
+            let mut scroll_throttle = ScrollThrottle::new();
 
-                        // Update PTY size
-                        let new_size = PtySize {
-                            rows,
-                            cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        };
+            loop {
+                tokio::select! {
+                    msg = control_rx.recv() => {
+                        let Some(msg) = msg else { break; };
+                        tracing::debug!(
+                            "PTY Control task - Received control message: {:?}",
+                            std::mem::discriminant(&msg)
+                        );
+                        match msg {
+                            PtyControlMessage::Resize { rows, cols } => {
+                                tracing::debug!("Processing resize request to {}x{}", cols, rows);
 
-                        {
-                            let pty_guard = control_pty.lock().await;
-                            if let Err(e) = pty_guard.resize(new_size) {
-                                tracing::error!("Failed to resize PTY to {}x{}: {}", cols, rows, e);
-                            } else {
-                                tracing::debug!("Successfully resized PTY to {}x{}", cols, rows);
+                                // Update PTY size
+                                let new_size = PtySize {
+                                    rows,
+                                    cols,
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                };
+
+                                {
+                                    let pty_guard = control_pty.lock().await;
+                                    if let Err(e) = pty_guard.resize(new_size) {
+                                        tracing::error!("Failed to resize PTY to {}x{}: {}", cols, rows, e);
+                                    } else {
+                                        tracing::debug!("Successfully resized PTY to {}x{}", cols, rows);
+                                    }
+                                }
+
+                                // Update current size tracking
+                                {
+                                    let mut size_guard = control_current_size.lock().await;
+                                    *size_guard = new_size;
+                                }
+
+                                // Update VT100 parser size
+                                {
+                                    let mut parser_guard = control_vt_parser.lock().await;
+                                    parser_guard.set_size(rows, cols);
+                                }
+
+                                // Broadcast the new size to subscribers
+                                let _ = control_size_tx.send(new_size);
+                            }
+                            PtyControlMessage::Terminate => {
+                                tracing::info!("PTY session termination requested");
+                                break;
+                            }
+                            PtyControlMessage::RequestKeyframe { response_tx } => {
+                                tracing::debug!("Control task - Keyframe requested by client");
+                                let keyframe = Self::generate_keyframe(
+                                    &control_vt_parser,
+                                    &control_cursor_pos,
+                                    &control_cursor_visible,
+                                    &control_current_size,
+                                )
+                                .await;
+
+                                tracing::debug!("Control task - Generated keyframe, sending response");
+                                // Send keyframe directly to the requesting client
+                                if response_tx.send(keyframe).is_err() {
+                                    tracing::warn!(
+                                        "Control task - Failed to send keyframe to requesting client (receiver dropped)"
+                                    );
+                                } else {
+                                    tracing::debug!("Control task - Keyframe sent successfully to client");
+                                }
                             }
                         }
-
-                        // Update current size tracking
-                        {
-                            let mut size_guard = control_current_size.lock().await;
-                            *size_guard = new_size;
-                        }
-
-                        // Update VT100 parser size
-                        {
-                            let mut parser_guard = control_vt_parser.lock().await;
-                            parser_guard.set_size(rows, cols);
-                        }
-
-                        // Broadcast the new size to subscribers
-                        let _ = control_size_tx.send(new_size);
                     }
-                    PtyControlMessage::Terminate => {
-                        tracing::info!("PTY session termination requested");
-                        break;
-                    }
-                    PtyControlMessage::RequestKeyframe { response_tx } => {
-                        tracing::debug!("Control task - Keyframe requested by client");
-                        let keyframe = Self::generate_keyframe(
-                            &control_vt_parser,
-                            &control_cursor_pos,
-                            &control_cursor_visible,
-                            &control_current_size,
-                        )
-                        .await;
+                    internal_msg = internal_control_rx.recv() => {
+                        let Some(internal_msg) = internal_msg else { break; };
+                        tracing::debug!("PTY Control task - Received internal control message: {:?}", internal_msg);
 
-                        tracing::debug!("Control task - Generated keyframe, sending response");
-                        // Send keyframe directly to the requesting client
-                        if response_tx.send(keyframe).is_err() {
-                            tracing::warn!(
-                                "Control task - Failed to send keyframe to requesting client (receiver dropped)"
-                            );
-                        } else {
-                            tracing::debug!("Control task - Keyframe sent successfully to client");
+                        match internal_msg {
+                            InternalControlMessage::TriggerGridUpdate => {
+                                // Throttle scroll updates to avoid overwhelming the system
+                                if scroll_throttle.should_update() {
+                                    tracing::debug!("Control task - Triggering grid update after scroll");
+                                    let keyframe = Self::generate_keyframe(
+                                        &control_vt_parser,
+                                        &control_cursor_pos,
+                                        &control_cursor_visible,
+                                        &control_current_size,
+                                    )
+                                    .await;
+
+                                    // Send keyframe to the same channel that sends diffs
+                                    if let Err(e) = control_grid_tx.send(keyframe) {
+                                        tracing::warn!("Failed to send scroll keyframe to grid channel: {}", e);
+                                    } else {
+                                        tracing::debug!("Scroll keyframe sent to grid channel");
+                                    }
+                                } else {
+                                    tracing::trace!("Scroll update throttled - too soon since last update");
+                                }
+                            }
                         }
                     }
                 }
