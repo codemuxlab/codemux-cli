@@ -14,6 +14,11 @@ pub enum ClientMessage {
     },
     #[serde(rename = "resize")]
     Resize { rows: u16, cols: u16 },
+    #[serde(rename = "scroll")]
+    Scroll {
+        direction: crate::core::pty_session::ScrollDirection,
+        lines: u16,
+    },
 }
 
 /// Messages sent from server to client - flattened to match frontend expectations

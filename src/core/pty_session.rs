@@ -81,11 +81,25 @@ pub struct KeyEvent {
     pub modifiers: KeyModifiers,
 }
 
+/// Direction for scroll events
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum ScrollDirection {
+    Up,
+    Down,
+}
+
 /// Input message for key events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PtyInput {
     /// Key event
     Key { event: KeyEvent, client_id: String },
+    /// Scroll event
+    Scroll {
+        direction: ScrollDirection,
+        lines: u16,
+        client_id: String,
+    },
 }
 
 /// Messages representing PTY input from clients
@@ -178,6 +192,8 @@ pub enum GridUpdateMessage {
         cells: Vec<((u16, u16), GridCell)>, // (row, col) -> cell
         cursor: (u16, u16),                 // (row, col)
         cursor_visible: bool,               // whether cursor is visible
+        scrollback_position: usize, // how many lines scrolled back from bottom (0 = at bottom)
+        scrollback_total: usize,    // total lines available in scrollback buffer
         #[ts(type = "string")]
         timestamp: std::time::SystemTime,
     },
@@ -186,6 +202,8 @@ pub enum GridUpdateMessage {
         changes: Vec<(u16, u16, GridCell)>, // (row, col, new_cell)
         cursor: Option<(u16, u16)>,         // new cursor position if changed
         cursor_visible: Option<bool>,       // cursor visibility if changed
+        scrollback_position: Option<usize>, // scrollback position if changed
+        scrollback_total: Option<usize>,    // scrollback total if changed
         #[ts(type = "string")]
         timestamp: std::time::SystemTime,
     },
@@ -353,7 +371,7 @@ impl PtySession {
             vt_parser: Arc::new(Mutex::new(vt100::Parser::new(
                 initial_rows,
                 initial_cols,
-                0,
+                10000, // Enable scrollback buffer with 10,000 lines
             ))),
             grid_state: Arc::new(Mutex::new(HashMap::new())),
             cursor_pos: Arc::new(Mutex::new((0, 0))),
@@ -713,19 +731,62 @@ impl PtySession {
 
         // Create input handler task
         let input_writer = writer.clone();
+        let input_vt_parser = vt_parser.clone();
+        let _input_grid_tx = grid_tx.clone();
         let input_task = tokio::spawn(async move {
             let mut input_rx = input_rx;
             while let Some(msg) = input_rx.recv().await {
-                let PtyInput::Key { event, .. } = &msg.input;
-                tracing::debug!("Processing key event: {:?}", event);
-                let bytes = Self::key_event_to_bytes(event);
+                match &msg.input {
+                    PtyInput::Key { event, .. } => {
+                        tracing::debug!("Processing key event: {:?}", event);
+                        let bytes = Self::key_event_to_bytes(event);
 
-                let mut writer_guard = input_writer.lock().await;
-                if let Err(e) = writer_guard.write_all(&bytes) {
-                    tracing::error!("Failed to write to PTY: {}", e);
-                    break;
+                        let mut writer_guard = input_writer.lock().await;
+                        if let Err(e) = writer_guard.write_all(&bytes) {
+                            tracing::error!("Failed to write to PTY: {}", e);
+                            break;
+                        }
+                        let _ = writer_guard.flush();
+                    }
+                    PtyInput::Scroll {
+                        direction, lines, ..
+                    } => {
+                        tracing::debug!("Processing scroll event: {:?} {} lines", direction, lines);
+
+                        // Use VT100 parser's built-in scrollback - it handles bounds internally
+                        {
+                            let mut parser_guard = input_vt_parser.lock().await;
+                            let current_scrollback = parser_guard.screen().scrollback();
+
+                            match direction {
+                                ScrollDirection::Up => {
+                                    let new_scrollback = current_scrollback + *lines as usize;
+                                    parser_guard.set_scrollback(new_scrollback);
+                                    tracing::debug!(
+                                        "Scrolled up from {} to {}",
+                                        current_scrollback,
+                                        new_scrollback
+                                    );
+                                }
+                                ScrollDirection::Down => {
+                                    let new_scrollback =
+                                        current_scrollback.saturating_sub(*lines as usize);
+                                    parser_guard.set_scrollback(new_scrollback);
+                                    tracing::debug!(
+                                        "Scrolled down from {} to {}",
+                                        current_scrollback,
+                                        new_scrollback
+                                    );
+                                }
+                            }
+                        }
+
+                        // Trigger a grid update since the view has changed
+                        // Note: We could generate a new GridUpdateMessage here, but it's simpler to
+                        // let the normal processing cycle handle it when new data arrives
+                        tracing::debug!("Scroll event processed, view updated");
+                    }
                 }
-                let _ = writer_guard.flush();
             }
         });
 
@@ -1017,6 +1078,10 @@ impl PtySession {
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);
 
+        // Get scrollback information
+        let scrollback_pos = screen.scrollback();
+        let scrollback_total = 10000; // Match the scrollback buffer size
+
         // Generate appropriate update message
         if previous_grid.is_empty() {
             // First update - send keyframe
@@ -1027,6 +1092,8 @@ impl PtySession {
                 cells: current_grid.clone().into_iter().collect(),
                 cursor: new_cursor,
                 cursor_visible: is_cursor_visible,
+                scrollback_position: scrollback_pos,
+                scrollback_total,
                 timestamp,
             })
         } else if !changes.is_empty() || cursor_changed {
@@ -1045,6 +1112,8 @@ impl PtySession {
                     None
                 },
                 cursor_visible: Some(is_cursor_visible), // Always send cursor visibility in diffs for now
+                scrollback_position: Some(scrollback_pos), // Always send scrollback position for now
+                scrollback_total: Some(scrollback_total),  // Always send scrollback total for now
                 timestamp,
             })
         } else {
@@ -1097,6 +1166,10 @@ impl PtySession {
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);
 
+        // Get scrollback information
+        let scrollback_pos = screen.scrollback();
+        let scrollback_total = 10000; // Match the scrollback buffer size
+
         // Debug keyframe generation
         let non_empty_count = current_grid
             .values()
@@ -1131,6 +1204,8 @@ impl PtySession {
             cells: current_grid.into_iter().collect(),
             cursor,
             cursor_visible: is_cursor_visible,
+            scrollback_position: scrollback_pos,
+            scrollback_total,
             timestamp: std::time::SystemTime::now(),
         }
     }

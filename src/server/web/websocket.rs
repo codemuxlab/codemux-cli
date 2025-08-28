@@ -220,6 +220,21 @@ async fn handle_socket(
                                         break;
                                     }
                                 }
+                                ClientMessage::Scroll { direction, lines } => {
+                                    tracing::debug!("WebSocket received scroll: {:?} {} lines", direction, lines);
+                                    // Convert to PtyInputMessage with scroll event
+                                    let input_msg = crate::core::pty_session::PtyInputMessage {
+                                        input: crate::core::pty_session::PtyInput::Scroll {
+                                            direction,
+                                            lines,
+                                            client_id: "web".to_string(),
+                                        },
+                                    };
+                                    if pty_input_tx.send(input_msg).is_err() {
+                                        tracing::error!("Failed to send scroll input to PTY");
+                                        break;
+                                    }
+                                }
                                 ClientMessage::Resize { rows, cols } => {
                                     tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
                                     // Send resize control message to PTY

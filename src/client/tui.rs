@@ -1,6 +1,7 @@
 use crate::core::pty_session::GridCell as PtyGridCell;
 use crate::core::pty_session::{
-    GridUpdateMessage, PtyChannels, PtyControlMessage, PtyInput, PtyInputMessage, TerminalColor,
+    GridUpdateMessage, PtyChannels, PtyControlMessage, PtyInput, PtyInputMessage, ScrollDirection,
+    TerminalColor,
 };
 use crate::utils::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
@@ -390,12 +391,12 @@ impl SessionTui {
     }
 
     async fn send_input_to_pty(&self, key: &crossterm::event::KeyEvent) {
-        tracing::debug!("send_input_to_pty called with key: {:?}", key);
+        tracing::trace!("send_input_to_pty called with key: {:?}", key);
 
         let channels = match self.get_pty_channels() {
             Ok(channels) => channels,
             Err(_) => {
-                tracing::debug!("PTY not connected yet, ignoring input");
+                tracing::warn!("PTY not connected yet, ignoring input");
                 return;
             }
         };
@@ -430,6 +431,34 @@ impl SessionTui {
             if matches!(key.code, crossterm::event::KeyCode::Enter) {
                 tracing::debug!("SENT ENTER - line should be processed now");
             }
+        }
+    }
+
+    async fn send_scroll_to_pty(&self, direction: ScrollDirection, lines: u16) {
+        tracing::debug!(
+            "send_scroll_to_pty called with direction: {:?}, lines: {}",
+            direction,
+            lines
+        );
+
+        let channels = match self.get_pty_channels() {
+            Ok(channels) => channels,
+            Err(_) => {
+                tracing::debug!("PTY not connected yet, ignoring scroll");
+                return;
+            }
+        };
+
+        let input_msg = PtyInputMessage {
+            input: PtyInput::Scroll {
+                direction,
+                lines,
+                client_id: "tui".to_string(),
+            },
+        };
+
+        if let Err(e) = channels.input_tx.send(input_msg) {
+            tracing::warn!("Failed to send scroll to PTY: {}", e);
         }
     }
 
@@ -508,7 +537,7 @@ impl SessionTui {
 
         tracing::debug!("MONITORING: Starting main event loop");
         loop {
-            tracing::trace!("MONITORING: iterate");
+            // tracing::trace!("MONITORING: iterate");
             tokio::select! {
                 biased; // Ensure keyboard events get priority over display updates
                 // Handle keyboard events from async stream (prioritize user input)
@@ -614,7 +643,7 @@ impl SessionTui {
                         Ok(_) => {
                             // Log less frequently - every 30 seconds
                             if uptime.as_secs() % 30 == 0 {
-                                tracing::debug!("Display update - uptime: {}s", uptime.as_secs());
+                                tracing::trace!("Display update - uptime: {}s", uptime.as_secs());
                             }
                         }
                         Err(e) => {
@@ -714,7 +743,7 @@ impl SessionTui {
                 // Periodic display update (also serves as heartbeat)
                 _ = display_interval.tick() => {
                     let uptime = self.start_time.elapsed();
-                    tracing::debug!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs());
+                    tracing::trace!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs());
                     self.draw(session_info, uptime)?;
                 }
 
@@ -746,6 +775,25 @@ impl SessionTui {
 
                                 // Send all other keys to PTY
                                 self.send_input_to_pty(&key).await;
+                            }
+                        }
+                        Some(Ok(Event::Mouse(mouse))) => {
+                            match mouse {
+                                crossterm::event::MouseEvent {
+                                    kind: crossterm::event::MouseEventKind::ScrollUp,
+                                    ..
+                                } => {
+                                    self.send_scroll_to_pty(ScrollDirection::Up, 3).await;
+                                }
+                                crossterm::event::MouseEvent {
+                                    kind: crossterm::event::MouseEventKind::ScrollDown,
+                                    ..
+                                } => {
+                                    self.send_scroll_to_pty(ScrollDirection::Down, 3).await;
+                                }
+                                _ => {
+                                    // Ignore other mouse events
+                                }
                             }
                         }
                         Some(Ok(Event::Resize(width, height))) => {
@@ -836,7 +884,7 @@ impl SessionTui {
         let terminal_grid = self.terminal_grid.clone();
         let terminal_cursor = self.terminal_cursor;
         let cursor_visible = self.terminal_cursor_visible;
-        let terminal_grid_size = (
+        let _terminal_grid_size = (
             terminal_size.height.saturating_sub(STATUS_BAR_HEIGHT),
             terminal_size.width,
         );
@@ -878,12 +926,13 @@ impl SessionTui {
                     if non_empty == 0 {
                         tracing::warn!("All {} grid cells are empty/whitespace during draw!", terminal_grid.len());
                     } else {
-                        tracing::debug!("Drawing {} cells, {} non-empty", terminal_grid.len(), non_empty);
+                        tracing::trace!("Drawing {} cells, {} non-empty", terminal_grid.len(), non_empty);
                     }
                 }
 
-                // Create terminal content from grid state
-                let terminal_content = render_terminal_from_grid(&terminal_grid, terminal_grid_size, terminal_cursor, cursor_visible, terminal_area.height, terminal_area.width);
+                // Create terminal content from grid state - calculate dimensions from grid
+                let grid_dimensions = calculate_grid_dimensions(&terminal_grid);
+                let terminal_content = render_terminal_from_grid(&terminal_grid, grid_dimensions, terminal_cursor, cursor_visible, terminal_area.height, terminal_area.width);
                 let terminal_widget = Paragraph::new(terminal_content)
                     .block(Block::default().borders(Borders::NONE))
                     .wrap(ratatui::widgets::Wrap { trim: false });
@@ -943,6 +992,19 @@ impl SessionTui {
     // No longer needed - moved to standalone function below
 }
 
+/// Calculate actual grid dimensions from the grid data
+fn calculate_grid_dimensions(terminal_grid: &std::collections::HashMap<(u16, u16), GridCell>) -> (u16, u16) {
+    if terminal_grid.is_empty() {
+        return (0, 0);
+    }
+    
+    let max_row = terminal_grid.keys().map(|(row, _)| *row).max().unwrap_or(0);
+    let max_col = terminal_grid.keys().map(|(_, col)| *col).max().unwrap_or(0);
+    
+    // Add 1 because grid uses 0-based indexing
+    (max_row + 1, max_col + 1)
+}
+
 /// Render terminal content from grid state for display
 fn render_terminal_from_grid(
     terminal_grid: &std::collections::HashMap<(u16, u16), GridCell>,
@@ -955,7 +1017,7 @@ fn render_terminal_from_grid(
     let (grid_rows, grid_cols) = terminal_size;
     let mut lines = Vec::new();
 
-    // Render each row of the terminal
+    // Render each row of the terminal - use server PTY size but trim to local display
     for row in 0..std::cmp::min(grid_rows, display_height) {
         let mut line_spans = Vec::new();
         let mut current_line = String::new();
@@ -1010,7 +1072,13 @@ fn render_terminal_from_grid(
                     current_line.clear();
                 }
 
-                current_line.push(cell.char);
+                // Filter out newlines and other control characters that shouldn't be rendered
+                let char_to_render = if cell.char == '\n' || cell.char == '\r' {
+                    ' '
+                } else {
+                    cell.char
+                };
+                current_line.push(char_to_render);
                 current_style = cell_style;
             } else {
                 // Empty cell - use space, but highlight if cursor is here and visible
@@ -1041,8 +1109,9 @@ fn render_terminal_from_grid(
         lines.push(Line::from(line_spans));
     }
 
-    // Fill remaining display lines with empty content if needed
-    while lines.len() < display_height as usize {
+    // Don't add empty lines - let the Paragraph widget handle the remaining space
+    // Only ensure we have at least one line to avoid empty widget
+    if lines.is_empty() {
         lines.push(Line::from(" "));
     }
 

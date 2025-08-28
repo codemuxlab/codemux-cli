@@ -5,4 +5,4 @@ import type { SerializablePtySize } from "./SerializablePtySize";
 /**
  * Terminal grid update messages
  */
-export type GridUpdateMessage = { "Keyframe": { size: SerializablePtySize, cells: Array<[[number, number], GridCell]>, cursor: [number, number], cursor_visible: boolean, timestamp: string, } } | { "Diff": { changes: Array<[number, number, GridCell]>, cursor: [number, number] | null, cursor_visible: boolean | null, timestamp: string, } };
+export type GridUpdateMessage = { "Keyframe": { size: SerializablePtySize, cells: Array<[[number, number], GridCell]>, cursor: [number, number], cursor_visible: boolean, scrollback_position: number, scrollback_total: number, timestamp: string, } } | { "Diff": { changes: Array<[number, number, GridCell]>, cursor: [number, number] | null, cursor_visible: boolean | null, scrollback_position: number | null, scrollback_total: number | null, timestamp: string, } };

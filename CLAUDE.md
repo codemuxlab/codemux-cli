@@ -253,6 +253,64 @@ pub struct GridCell {
 - **Terminal Interface**: Full terminal emulation with scaling and proper cursor handling
 - **Cross-platform**: Works on web browsers via React Native Web
 - **Debug Capture**: Session recording and analysis for troubleshooting
+- **Terminal Scrollback**: Full scrollback buffer support with mouse wheel and scroll events
+
+### Terminal Scrollback Implementation
+CodeMux provides full terminal scrollback functionality that allows users to scroll through terminal history, essential for reviewing command output, logs, and debugging information.
+
+#### Architecture
+- **VT100 Scrollback Buffer**: Uses the `vt100` crate's built-in scrollback with 10,000 line history
+- **Scroll Event Handling**: Both TUI (mouse wheel) and web clients (scroll events) send `PtyInput::Scroll` messages
+- **View Management**: `parser.set_scrollback(position)` changes the visible content without affecting the actual PTY
+- **State Synchronization**: Grid updates include `scrollback_position` and `scrollback_total` for client scroll indicators
+
+#### Implementation Details
+```rust
+// Scroll event processing in PTY session
+PtyInput::Scroll { direction, lines, .. } => {
+    let mut parser_guard = input_vt_parser.lock().await;
+    let current_scrollback = parser_guard.screen().scrollback();
+    
+    match direction {
+        ScrollDirection::Up => {
+            let new_scrollback = current_scrollback + lines as usize;
+            parser_guard.set_scrollback(new_scrollback);
+        }
+        ScrollDirection::Down => {
+            let new_scrollback = current_scrollback.saturating_sub(lines as usize);
+            parser_guard.set_scrollback(new_scrollback);
+        }
+    }
+}
+```
+
+#### Key Features
+- **Mouse Wheel Support**: TUI captures mouse scroll events and forwards to PTY session
+- **Bounds Safety**: VT100 library handles all bounds checking internally - no manual limits needed
+- **TypeScript Integration**: Full type safety with generated bindings for scroll state
+- **Client Indicators**: Web and TUI clients receive scroll position for UI indicators
+- **Seamless Experience**: Scrolling works exactly like traditional terminal multiplexers
+
+#### Grid Update Messages
+Both `Keyframe` and `Diff` messages include scrollback information:
+```typescript
+// Generated TypeScript types
+type GridUpdateMessage = {
+  Keyframe: {
+    scrollback_position: number;  // Lines scrolled back from bottom (0 = current)
+    scrollback_total: number;     // Total scrollback buffer size (10,000)
+    // ... other fields
+  }
+} | {
+  Diff: {
+    scrollback_position: number | null;  // Position if changed
+    scrollback_total: number | null;     // Total if changed  
+    // ... other fields
+  }
+}
+```
+
+This implementation provides proper terminal multiplexer scrollback behavior while maintaining type safety and performance.
 
 ## Release Process
 

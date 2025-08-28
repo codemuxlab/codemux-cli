@@ -395,15 +395,21 @@ impl SessionConnection {
                 tokio::select! {
                     // Handle input from TUI -> WebSocket
                     Some(input_msg) = input_rx.recv() => {
-                        // Handle Key events
-                        let crate::core::pty_session::PtyInput::Key { event, .. } = input_msg.input;
-                        let client_msg = ClientMessage::Key {
-                            code: event.code,
-                            modifiers: event.modifiers
+                        // Handle both Key and Scroll events
+                        let client_msg = match input_msg.input {
+                            crate::core::pty_session::PtyInput::Key { event, .. } => {
+                                ClientMessage::Key {
+                                    code: event.code,
+                                    modifiers: event.modifiers
+                                }
+                            }
+                            crate::core::pty_session::PtyInput::Scroll { direction, lines, .. } => {
+                                ClientMessage::Scroll { direction, lines }
+                            }
                         };
 
                         if let Ok(json) = serde_json::to_string(&client_msg) {
-                            tracing::debug!("Client WebSocket sending input: {} chars", json.len());
+                            tracing::trace!("Client WebSocket sending input: {} chars", json.len());
                             if ws_stream.send(Message::Text(json)).await.is_err() {
                                 tracing::error!("Failed to send input via client WebSocket");
                                 break;
@@ -439,7 +445,7 @@ impl SessionConnection {
                     msg = ws_stream.next() => {
                         match msg {
                             Some(Ok(Message::Text(text))) => {
-                                tracing::debug!("Client WebSocket received message: {} chars", text.len());
+                                tracing::trace!("Client WebSocket received message: {} chars", text.len());
                                 if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
                                     match server_msg {
                                         ServerMessage::Output { data, timestamp } => {
@@ -527,10 +533,14 @@ impl SessionConnection {
 
     /// Send PTY input to the session
     pub async fn send_input(&mut self, input: PtyInputMessage) -> Result<()> {
-        let crate::core::pty_session::PtyInput::Key { event, .. } = input.input;
-        let client_msg = ClientMessage::Key {
-            code: event.code,
-            modifiers: event.modifiers,
+        let client_msg = match input.input {
+            crate::core::pty_session::PtyInput::Key { event, .. } => ClientMessage::Key {
+                code: event.code,
+                modifiers: event.modifiers,
+            },
+            crate::core::pty_session::PtyInput::Scroll {
+                direction, lines, ..
+            } => ClientMessage::Scroll { direction, lines },
         };
         self.send_message(client_msg).await
     }
