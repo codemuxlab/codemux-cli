@@ -7,8 +7,7 @@ use crate::server::{manager::SessionManagerHandle, start_web_server};
 use crate::utils::tui_writer::LogEntry;
 use crate::{Config, Result};
 use std::path::PathBuf;
-use std::time::SystemTime;
-use std::{env, fs};
+use std::env;
 
 pub struct RunSessionParams {
     pub config: Config,
@@ -20,83 +19,6 @@ pub struct RunSessionParams {
     pub logfile: Option<PathBuf>,
     pub args: Vec<String>,
     pub log_rx: tokio::sync::mpsc::UnboundedReceiver<LogEntry>,
-}
-
-// Helper function to find most recent JSONL conversation file
-fn find_most_recent_jsonl() -> Result<Option<String>> {
-    tracing::info!("Looking for most recent JSONL file in ~/.claude/projects/");
-
-    let home =
-        env::var("HOME").map_err(|_| anyhow::anyhow!("HOME environment variable not set"))?;
-    let claude_projects_path = PathBuf::from(&home).join(".claude").join("projects");
-
-    if !claude_projects_path.exists() {
-        tracing::info!("No ~/.claude/projects directory found");
-        return Ok(None);
-    }
-
-    let mut most_recent: Option<(SystemTime, String, PathBuf)> = None;
-
-    // Walk through all project directories
-    for project_dir in fs::read_dir(&claude_projects_path)? {
-        let project_dir = project_dir?;
-        if !project_dir.file_type()?.is_dir() {
-            continue;
-        }
-
-        let project_path = project_dir.path();
-        tracing::debug!("Checking project directory: {:?}", project_path);
-
-        // Look for JSONL files in this project directory
-        if let Ok(entries) = fs::read_dir(&project_path) {
-            for entry in entries.flatten() {
-                let file_path = entry.path();
-                if let Some(extension) = file_path.extension() {
-                    if extension == "jsonl" {
-                        if let Ok(metadata) = entry.metadata() {
-                            if let Ok(modified) = metadata.modified() {
-                                let session_id = file_path
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
-
-                                tracing::debug!(
-                                    "Found JSONL file: {:?}, session_id: {}, modified: {:?}",
-                                    file_path,
-                                    session_id,
-                                    modified
-                                );
-
-                                match &most_recent {
-                                    None => {
-                                        most_recent = Some((modified, session_id, file_path));
-                                    }
-                                    Some((prev_time, _, _)) => {
-                                        if modified > *prev_time {
-                                            most_recent = Some((modified, session_id, file_path));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if let Some((_, session_id, file_path)) = most_recent {
-        tracing::info!(
-            "Most recent JSONL file: {:?} (session_id: {})",
-            file_path,
-            session_id
-        );
-        Ok(Some(session_id))
-    } else {
-        tracing::info!("No JSONL files found");
-        Ok(None)
-    }
 }
 
 pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
@@ -182,17 +104,10 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
     }
 
     // Determine if we're continuing a previous session
+    // For --continue, let the server handle finding the most recent session
     let (is_continuing, previous_session_id) = if continue_session {
-        match find_most_recent_jsonl()? {
-            Some(found_session_id) => {
-                tracing::info!("🔄 Continuing from previous session: {}", found_session_id);
-                (true, Some(found_session_id))
-            }
-            None => {
-                tracing::info!("ℹ️  No existing JSONL files found, creating new session");
-                (false, None)
-            }
-        }
+        tracing::info!("🔄 Requesting server to continue most recent session");
+        (true, None)  // Server will find and provide the session ID
     } else if let Some(ref session_id_to_resume) = resume_session {
         tracing::info!(
             "🔄 Resuming from specified session: {}",
@@ -207,9 +122,14 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
     let mut agent_args = args;
     if agent.to_lowercase() == "claude" && is_continuing {
         if let Some(prev_id) = &previous_session_id {
+            // Specific session ID provided (from --resume flag)
             tracing::info!("Adding --resume flag with session ID to Claude agent args");
             agent_args.push("--resume".to_string());
             agent_args.push(prev_id.clone());
+        } else if continue_session {
+            // --continue flag: let server/Claude find the most recent session
+            tracing::info!("Adding --continue flag to Claude agent args");
+            agent_args.push("--continue".to_string());
         }
     }
 
