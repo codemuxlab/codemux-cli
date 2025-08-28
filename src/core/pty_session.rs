@@ -29,6 +29,7 @@ pub enum PtyControlMessage {
 #[derive(Debug)]
 enum InternalControlMessage {
     TriggerGridUpdate,
+    ResetScroll,
 }
 
 /// Throttling for scroll keyframe updates
@@ -774,6 +775,14 @@ impl PtySession {
                 match &msg.input {
                     PtyInput::Key { event, .. } => {
                         tracing::debug!("Processing key event: {:?}", event);
+                        
+                        // Reset scroll position on any key press to return to current content
+                        if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll) {
+                            tracing::warn!("Failed to send scroll reset message: {}", e);
+                        } else {
+                            tracing::debug!("Sent scroll reset on key press");
+                        }
+                        
                         let bytes = Self::key_event_to_bytes(event);
 
                         let mut writer_guard = input_writer.lock().await;
@@ -942,6 +951,30 @@ impl PtySession {
                                     }
                                 } else {
                                     tracing::trace!("Scroll update throttled - too soon since last update");
+                                }
+                            }
+                            InternalControlMessage::ResetScroll => {
+                                tracing::debug!("Control task - Resetting scroll position on key press");
+                                
+                                // Reset scrollback to 0 (current content)
+                                {
+                                    let mut parser_guard = control_vt_parser.lock().await;
+                                    parser_guard.set_scrollback(0);
+                                }
+                                
+                                // Generate and send keyframe with reset scroll position
+                                let keyframe = Self::generate_keyframe(
+                                    &control_vt_parser,
+                                    &control_cursor_pos,
+                                    &control_cursor_visible,
+                                    &control_current_size,
+                                )
+                                .await;
+
+                                if let Err(e) = control_grid_tx.send(keyframe) {
+                                    tracing::warn!("Failed to send scroll reset keyframe to grid channel: {}", e);
+                                } else {
+                                    tracing::debug!("Scroll reset keyframe sent to grid channel");
                                 }
                             }
                         }
