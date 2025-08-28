@@ -304,6 +304,41 @@ export default function Terminal({ sessionId }: TerminalProps) {
 		};
 	}, [sessionId, handleWebSocketMessage]);
 
+	const sendScrollEvent = useCallback(
+		(direction: "Up" | "Down", lines: number = 1) => {
+			if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+				const message: ClientMessage = {
+					type: "scroll",
+					direction,
+					lines,
+				};
+				wsRef.current.send(JSON.stringify(message));
+			}
+		},
+		[],
+	);
+
+	// Add wheel event listener for web platforms
+	useEffect(() => {
+		const handleWheel = (event: WheelEvent) => {
+			// Prevent default scroll behavior
+			event.preventDefault();
+
+			// Determine scroll direction from wheel delta
+			const direction = event.deltaY > 0 ? "Down" : "Up";
+
+			sendScrollEvent(direction, 1);
+		};
+
+		// Add to document for web platforms
+		if (typeof window !== "undefined") {
+			document.addEventListener("wheel", handleWheel, { passive: false });
+			return () => {
+				document.removeEventListener("wheel", handleWheel);
+			};
+		}
+	}, [sendScrollEvent]);
+
 	const _sendInput = useCallback((data: string) => {
 		if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
 			wsRef.current.send(
@@ -472,7 +507,9 @@ export default function Terminal({ sessionId }: TerminalProps) {
 						minHeight: "100%",
 					}}
 				>
-					<TerminalGrid />
+					<View ref={terminalRef}>
+						<TerminalGrid />
+					</View>
 				</ScrollView>
 			</TerminalBackground>
 
