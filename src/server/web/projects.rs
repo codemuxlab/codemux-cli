@@ -1,9 +1,10 @@
-use axum::{extract::State, Json};
+use axum::{extract::State, response::IntoResponse, Json};
 use std::path::PathBuf;
 use tokio::fs;
 
+use super::json_api::{json_api_response, json_api_error, JsonApiResource};
 use super::types::{AddProjectRequest, AppState};
-use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo, SessionType};
+use crate::core::session::{ProjectWithSessions, SessionInfo, SessionType};
 
 /// Find all JSONL sessions for a specific project path
 async fn find_project_jsonl_sessions(project_path: &str) -> Result<Vec<SessionInfo>, std::io::Error> {
@@ -50,7 +51,7 @@ async fn find_project_jsonl_sessions(project_path: &str) -> Result<Vec<SessionIn
     Ok(sessions)
 }
 
-pub async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectWithSessions>> {
+pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
     // Return actual projects with their sessions
     let projects = state.session_manager.list_projects().await;
     let active_sessions = state.session_manager.list_sessions().await;
@@ -91,19 +92,35 @@ pub async fn list_projects(State(state): State<AppState>) -> Json<Vec<ProjectWit
         });
     }
 
-    Json(projects_with_sessions)
+    // Convert to JSON API format
+    let resources: Vec<JsonApiResource> = projects_with_sessions
+        .into_iter()
+        .map(|project| project.into())
+        .collect();
+    
+    Json(json_api_response(resources))
 }
 
 pub async fn add_project(
     State(state): State<AppState>,
     Json(req): Json<AddProjectRequest>,
-) -> Result<Json<ProjectInfo>, String> {
+) -> impl IntoResponse {
     match state
         .session_manager
         .create_project(req.name, req.path)
         .await
     {
-        Ok(info) => Ok(Json(info)),
-        Err(e) => Err(e.to_string()),
+        Ok(info) => {
+            let resource: JsonApiResource = info.into();
+            Json(json_api_response(resource)).into_response()
+        }
+        Err(e) => {
+            Json(json_api_error(
+                "500".to_string(),
+                "Project Creation Failed".to_string(),
+                e.to_string(),
+            ))
+            .into_response()
+        }
     }
 }

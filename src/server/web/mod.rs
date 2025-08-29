@@ -1,4 +1,5 @@
 pub mod git;
+pub mod json_api;
 pub mod projects;
 pub mod routes;
 pub mod sessions;

@@ -9,8 +9,8 @@ use axum::{
 use futures::stream::Stream;
 use std::convert::Infallible;
 
+use super::json_api::{json_api_response, json_api_error, JsonApiResource};
 use super::types::{AppState, CreateSessionRequest};
-use crate::core::session::SessionInfo;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
@@ -61,7 +61,7 @@ async fn find_most_recent_jsonl() -> Result<Option<String>, std::io::Error> {
 pub async fn create_session(
     State(state): State<AppState>,
     Json(mut req): Json<CreateSessionRequest>,
-) -> Result<Json<SessionInfo>, String> {
+) -> impl IntoResponse {
     tracing::debug!(
         "Creating session with agent: {}, args: {:?}",
         req.agent,
@@ -101,11 +101,17 @@ pub async fn create_session(
     {
         Ok(info) => {
             tracing::info!("Session created successfully: {}", info.id);
-            Ok(Json(info))
+            let resource: JsonApiResource = info.into();
+            Json(json_api_response(resource)).into_response()
         }
         Err(e) => {
             tracing::error!("Failed to create session: {}", e);
-            Err(e.to_string())
+            Json(json_api_error(
+                "500".to_string(),
+                "Session Creation Failed".to_string(),
+                e.to_string(),
+            ))
+            .into_response()
         }
     }
 }
@@ -113,25 +119,37 @@ pub async fn create_session(
 pub async fn get_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<SessionInfo>, String> {
-    state
-        .session_manager
-        .get_session(&id)
-        .await
-        .map(Json)
-        .ok_or_else(|| "Session not found".to_string())
+) -> impl IntoResponse {
+    match state.session_manager.get_session(&id).await {
+        Some(info) => {
+            let resource: JsonApiResource = info.into();
+            Json(json_api_response(resource)).into_response()
+        }
+        None => Json(json_api_error(
+            "404".to_string(),
+            "Session Not Found".to_string(),
+            format!("Session with id '{}' not found", id),
+        ))
+        .into_response(),
+    }
 }
 
 pub async fn delete_session(
     Path(id): Path<String>,
     State(state): State<AppState>,
-) -> Result<String, String> {
-    state
-        .session_manager
-        .close_session(&id)
-        .await
-        .map(|_| "Session closed".to_string())
-        .map_err(|e| e.to_string())
+) -> impl IntoResponse {
+    match state.session_manager.close_session(&id).await {
+        Ok(_) => Json(json_api_response(serde_json::json!({
+            "message": "Session closed successfully"
+        })))
+        .into_response(),
+        Err(e) => Json(json_api_error(
+            "500".to_string(),
+            "Session Deletion Failed".to_string(),
+            e.to_string(),
+        ))
+        .into_response(),
+    }
 }
 
 pub async fn stream_session_jsonl(

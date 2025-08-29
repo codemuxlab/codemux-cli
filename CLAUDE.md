@@ -216,6 +216,42 @@ When implementing features, consider using:
 - **Type Safety**: All API endpoints must have corresponding TypeScript interfaces
 - **Error Handling**: Proper error boundaries and user feedback for API failures
 
+### TypeScript Bindings (ts-rs)
+- **Automatic Generation**: TypeScript types are automatically generated from Rust structs using ts-rs
+- **Usage**: Add `#[derive(TS)]` and `#[ts(export)]` to Rust structs that need TypeScript bindings
+- **Generation Command**: Run `just ts-bindings` to generate/update TypeScript types
+- **Location**: Generated types are placed in `bindings/` directory
+- **Testing**: ts-rs automatically creates test functions for each exported type (no manual tests needed)
+- **Example**:
+  ```rust
+  use ts_rs::TS;
+  
+  #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+  #[ts(export)]
+  pub struct SessionInfo {
+      pub id: String,
+      pub agent: String,
+  }
+  ```
+
+### API Standards (JSON API Specification)
+- **Specification**: All API responses follow JSON API v1.0 specification
+- **Response Structure**: 
+  ```json
+  {
+    "data": {
+      "type": "resource-type",
+      "id": "resource-id",
+      "attributes": { ... },
+      "relationships": { ... }
+    }
+  }
+  ```
+- **Error Format**: Errors use JSON API error objects with status, title, and detail fields
+- **Implementation**: Use `json_api` module helper functions for consistent formatting
+- **Resource Types**: Common types include "project", "session", "git-status", "git-diff"
+- **Relationships**: Sessions belong to projects, expressed via relationships field
+
 ### Grid Cell Structure
 The `GridCell` struct represents terminal content with full styling support:
 ```rust
