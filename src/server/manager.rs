@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::core::{
     pty_session::{PtyChannels, PtySession},
-    session::{ProjectInfo, SessionInfo},
+    session::{ProjectInfo, SessionInfo, SessionType},
     Config,
 };
 
@@ -401,6 +401,7 @@ impl SessionManagerActor {
             agent,
             project: resolved_project_id,
             status: "running".to_string(),
+            session_type: SessionType::Active,
         })
     }
 
@@ -410,6 +411,7 @@ impl SessionManagerActor {
             agent: state.agent.clone(),
             project: state.project_id.clone(),
             status: "running".to_string(),
+            session_type: SessionType::Active,
         })
     }
 
@@ -448,6 +450,7 @@ impl SessionManagerActor {
                 agent: state.agent.clone(),
                 project: state.project_id.clone(),
                 status: "running".to_string(),
+                session_type: SessionType::Active,
             })
             .collect()
     }
