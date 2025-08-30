@@ -446,12 +446,10 @@ impl SessionManagerActor {
         }
 
         // Handle project association and working directory
-        let resolved_project_id = if let Some(proj_id) = project_id {
+        let (resolved_project_id, working_dir) = if let Some(proj_id) = project_id {
             // Use provided project ID
-            if let Some(project) = self.projects.get(&proj_id) {
-                std::env::set_current_dir(&project.path)?;
-            }
-            Some(proj_id)
+            let working_path = self.projects.get(&proj_id).map(|p| p.path.clone());
+            (Some(proj_id), working_path)
         } else if let Some(current_path) = path {
             // Try to find existing project for this path
             let mut found_project_id = None;
@@ -462,13 +460,12 @@ impl SessionManagerActor {
                 }
             }
 
+            let path_buf = std::path::PathBuf::from(&current_path);
             if let Some(existing_id) = found_project_id {
                 // Found existing project
-                std::env::set_current_dir(&current_path)?;
-                Some(existing_id)
+                (Some(existing_id), Some(path_buf))
             } else {
                 // Create temporary project for this path
-                let path_buf = std::path::PathBuf::from(&current_path);
                 let project_name = path_buf
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -485,12 +482,11 @@ impl SessionManagerActor {
                     },
                 );
 
-                std::env::set_current_dir(&current_path)?;
-                Some(temp_project_id)
+                (Some(temp_project_id), Some(path_buf))
             }
         } else {
             // No project or path specified
-            None
+            (None, None)
         };
 
         tracing::debug!(
@@ -498,7 +494,7 @@ impl SessionManagerActor {
             session_id,
             agent
         );
-        let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args)?;
+        let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args, working_dir)?;
         tracing::debug!(
             "SessionManager - PTY session created, channels available, spawning start task"
         );
@@ -650,20 +646,39 @@ impl SessionManagerActor {
         // For now, we'll create a new PTY session with the provided parameters
         // In a full implementation, we might want to restore from persisted JSONL files
         
-        tracing::info!("Creating new PTY session for resumed session {}", session_id);
-
-        // Determine project path from project_id
-        let _project_path = if let Some(project_id) = &project_id {
+        // Determine project path from project_id or cached session data
+        let project_path = if let Some(project_id) = &project_id {
             self.projects.get(project_id).map(|p| p.path.clone())
+        } else if let Some(cache) = &self.claude_cache {
+            // Try to get the original project path from the cached session
+            if let Some(cached_session) = cache.get_session(&session_id).await {
+                Some(cached_session.project_path)
+            } else {
+                None
+            }
         } else {
             None
         };
 
-        // Create a new PTY session
+        // Create a new PTY session with --resume flag for session resumption
+        let mut resume_args = args.clone();
+        if agent.to_lowercase() == "claude" {
+            // Check if resume flag is already present
+            let has_resume = resume_args.iter().any(|arg| arg == "--resume" || arg.starts_with("--resume="));
+            if !has_resume {
+                resume_args.push("--resume".to_string());
+                resume_args.push(session_id.clone());
+                tracing::info!("Added --resume {} flag for Claude session resumption", session_id);
+            }
+        }
+        
+        tracing::info!("Creating new PTY session for resumed session {} with resume args: {:?} in directory: {:?}", session_id, resume_args, project_path);
+        
         let (pty_session, channels) = PtySession::new(
             session_id.clone(),
             agent.clone(),
-            args.clone(),
+            resume_args,
+            project_path,
         )?;
 
         // Store the session with the specific session_id
