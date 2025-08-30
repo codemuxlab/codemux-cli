@@ -11,6 +11,13 @@ export type {
 	GridUpdateMessage,
 	GridUpdateMessage as ApiGridUpdateMessage,
 } from "../../../bindings/GridUpdateMessage";
+// JSON API types
+export type { JsonApiDocument } from "../../../bindings/JsonApiDocument";
+export type { JsonApiError } from "../../../bindings/JsonApiError";
+export type { JsonApiErrorDocument } from "../../../bindings/JsonApiErrorDocument";
+export type { JsonApiRelationship } from "../../../bindings/JsonApiRelationship";
+export type { JsonApiResource } from "../../../bindings/JsonApiResource";
+export type { JsonApiResourceIdentifier } from "../../../bindings/JsonApiResourceIdentifier";
 export type { KeyCode, KeyCode as WebKeyCode } from "../../../bindings/KeyCode";
 export type {
 	KeyEvent,
@@ -20,8 +27,13 @@ export type {
 	KeyModifiers,
 	KeyModifiers as WebKeyModifiers,
 } from "../../../bindings/KeyModifiers";
+export type { ProjectInfo } from "../../../bindings/ProjectInfo";
+export type { ProjectWithSessions } from "../../../bindings/ProjectWithSessions";
+export type { ScrollDirection } from "../../../bindings/ScrollDirection";
 export type { SerializablePtySize } from "../../../bindings/SerializablePtySize";
 export type { ServerMessage } from "../../../bindings/ServerMessage";
+export type { SessionInfo } from "../../../bindings/SessionInfo";
+export type { SessionType } from "../../../bindings/SessionType";
 export type {
 	TerminalColor,
 	TerminalColor as StoreTerminalColor,

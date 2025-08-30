@@ -1,4 +1,4 @@
-import type { GridCell } from "./bindings";
+import type { GridCell, ProjectWithSessions, SessionInfo } from "./bindings";
 
 // Base types for API responses
 export interface ApiResponse<T = unknown> {
@@ -13,16 +13,9 @@ export interface ApiError {
 	status?: number;
 }
 
-// Session related types
-export interface Session {
-	id: string;
-	agent: string;
-	status: "running" | "active" | "inactive" | "completed" | "error";
-	created?: string;
-	updated?: string;
-	project?: string; // Changed from project_id to project to match backend
-	project_path?: string;
-}
+// Session related types - extend from generated bindings
+// Use generated SessionInfo directly from backend
+export type { SessionInfo as Session } from "./bindings";
 
 export interface CreateSessionRequest {
 	agent?: string;
@@ -30,16 +23,8 @@ export interface CreateSessionRequest {
 	project_path?: string;
 }
 
-// Project related types
-export interface ProjectInfo {
-	id: string;
-	name: string;
-	path: string;
-	created?: string;
-	updated?: string;
-	active_sessions?: number;
-	sessions: Session[]; // Now includes sessions array
-}
+// Use generated ProjectWithSessions directly from backend
+export type { ProjectWithSessions as ProjectInfo } from "./bindings";
 
 export interface CreateProjectRequest {
 	name: string;
@@ -216,14 +201,14 @@ export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 export type RequiredFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
 // Export common type guards
-export const isSession = (obj: unknown): obj is Session => {
+export const isSession = (obj: unknown): obj is SessionInfo => {
 	return (
 		obj !== null &&
 		typeof obj === "object" &&
 		"id" in obj &&
-		typeof (obj as Session).id === "string" &&
+		typeof (obj as SessionInfo).id === "string" &&
 		"agent" in obj &&
-		typeof (obj as Session).agent === "string"
+		typeof (obj as SessionInfo).agent === "string"
 	);
 };
 
@@ -247,15 +232,15 @@ export const isGitDiff = (obj: unknown): obj is GitDiff => {
 	);
 };
 
-export const isProjectInfo = (obj: unknown): obj is ProjectInfo => {
+export const isProjectInfo = (obj: unknown): obj is ProjectWithSessions => {
 	return (
 		obj !== null &&
 		typeof obj === "object" &&
 		"id" in obj &&
-		typeof (obj as ProjectInfo).id === "string" &&
+		typeof (obj as ProjectWithSessions).id === "string" &&
 		"name" in obj &&
-		typeof (obj as ProjectInfo).name === "string" &&
+		typeof (obj as ProjectWithSessions).name === "string" &&
 		"path" in obj &&
-		typeof (obj as ProjectInfo).path === "string"
+		typeof (obj as ProjectWithSessions).path === "string"
 	);
 };

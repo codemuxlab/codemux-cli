@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import React from "react";
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { LastMessage } from "../components/LastMessage";
 import { useProjects } from "../hooks/api";
 
 export default function Page() {
@@ -89,28 +90,47 @@ export default function Page() {
 														<Text className="text-white text-sm font-semibold">
 															Session: {session.id}
 														</Text>
-														<Text className="text-gray-400 text-xs">
-															Agent: {session.agent}
-														</Text>
+														<View className="flex-row items-center gap-2 mt-1">
+															<Text className="text-gray-400 text-xs">
+																Agent: {session.agent}
+															</Text>
+															{session.session_type === "Historical" && (
+																<View className="px-1.5 py-0.5 rounded bg-amber-900">
+																	<Text className="text-amber-400 text-xs">
+																		HISTORICAL
+																	</Text>
+																</View>
+															)}
+														</View>
 													</View>
 													<View
 														className={`px-2 py-1 rounded ${
 															session.status === "running"
 																? "bg-green-900"
-																: "bg-gray-600"
+																: session.session_type === "Active"
+																	? "bg-blue-900"
+																	: "bg-gray-600"
 														}`}
 													>
 														<Text
 															className={`text-xs ${
 																session.status === "running"
 																	? "text-green-400"
-																	: "text-gray-400"
+																	: session.session_type === "Active"
+																		? "text-blue-400"
+																		: "text-gray-400"
 															}`}
 														>
 															{session.status.toUpperCase()}
 														</Text>
 													</View>
 												</View>
+
+												{/* Last Message */}
+												<LastMessage
+													message={session.last_message}
+													agent={session.agent}
+												/>
 
 												<View className="flex-row gap-4">
 													<TouchableOpacity

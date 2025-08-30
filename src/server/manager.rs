@@ -9,6 +9,7 @@ use crate::core::{
     session::{ProjectInfo, SessionInfo, SessionType},
     Config,
 };
+use crate::server::claude_cache::{CacheEvent, ClaudeProjectsCache};
 
 // Commands that can be sent to the SessionManager actor
 pub enum SessionCommand {
@@ -30,6 +31,10 @@ pub enum SessionCommand {
     ListSessions {
         response_tx: oneshot::Sender<Vec<SessionInfo>>,
     },
+    GetRecentProjectSessions {
+        project_path: std::path::PathBuf,
+        response_tx: oneshot::Sender<Vec<SessionInfo>>,
+    },
     CloseSession {
         session_id: String,
         response_tx: oneshot::Sender<Result<()>>,
@@ -45,6 +50,13 @@ pub enum SessionCommand {
     ShutdownAllSessions {
         response_tx: oneshot::Sender<()>,
     },
+    ResumeSession {
+        session_id: String,
+        agent: String,
+        args: Vec<String>,
+        project_id: Option<String>,
+        response_tx: oneshot::Sender<Result<SessionInfo>>,
+    },
 }
 
 // Actor handle for communicating with SessionManager
@@ -59,6 +71,7 @@ struct SessionManagerActor {
     sessions: HashMap<String, SessionState>,
     projects: HashMap<String, Project>,
     command_rx: mpsc::UnboundedReceiver<SessionCommand>,
+    claude_cache: Option<ClaudeProjectsCache>,
 }
 
 struct SessionState {
@@ -83,6 +96,7 @@ impl SessionManagerHandle {
             sessions: HashMap::new(),
             projects: HashMap::new(),
             command_rx,
+            claude_cache: None, // Will be initialized in run()
         };
 
         // Spawn the actor task
@@ -176,6 +190,32 @@ impl SessionManagerHandle {
             .map_err(|_| anyhow!("SessionManager actor did not respond"))?
     }
 
+    pub async fn resume_session(
+        &self,
+        session_id: String,
+        agent: String,
+        args: Vec<String>,
+        project_id: Option<String>,
+    ) -> Result<SessionInfo> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        let command = SessionCommand::ResumeSession {
+            session_id,
+            agent,
+            args,
+            project_id,
+            response_tx,
+        };
+
+        self.command_tx
+            .send(command)
+            .map_err(|_| anyhow!("SessionManager actor is not running"))?;
+
+        response_rx
+            .await
+            .map_err(|_| anyhow!("SessionManager actor did not respond"))?
+    }
+
     pub async fn create_project(&self, name: String, path: String) -> Result<ProjectInfo> {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -206,6 +246,21 @@ impl SessionManagerHandle {
         response_rx.await.unwrap_or_else(|_| vec![])
     }
 
+    pub async fn get_recent_project_sessions(&self, project_path: std::path::PathBuf) -> Vec<SessionInfo> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        let command = SessionCommand::GetRecentProjectSessions { 
+            project_path,
+            response_tx 
+        };
+
+        if self.command_tx.send(command).is_err() {
+            return vec![];
+        }
+
+        response_rx.await.unwrap_or_else(|_| vec![])
+    }
+
     pub async fn shutdown_all_sessions(&self) {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -219,9 +274,83 @@ impl SessionManagerHandle {
 
 impl SessionManagerActor {
     async fn run(mut self) {
+        // Initialize the Claude projects cache
+        match self.initialize_claude_cache().await {
+            Ok(()) => tracing::info!("Claude projects cache initialized successfully"),
+            Err(e) => tracing::warn!("Failed to initialize Claude projects cache: {}", e),
+        }
+        
+        // Process commands
         while let Some(command) = self.command_rx.recv().await {
             self.handle_command(command).await;
         }
+    }
+    
+    async fn initialize_claude_cache(&mut self) -> Result<()> {
+        let mut cache = ClaudeProjectsCache::new()?;
+        cache.initialize().await?;
+        
+        // Get the event receiver before moving cache
+        let mut event_rx = cache.event_rx.take()
+            .ok_or_else(|| anyhow!("Failed to get cache event receiver"))?;
+        
+        // Store the cache
+        self.claude_cache = Some(cache);
+        
+        // Spawn a task to handle cache events
+        tokio::spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                match event {
+                    CacheEvent::SessionAdded(session) => {
+                        tracing::info!("Cache: Session added - {} at {:?}", 
+                            session.session_id, session.file_path);
+                    }
+                    CacheEvent::SessionModified(session) => {
+                        tracing::debug!("Cache: Session modified - {} at {:?}", 
+                            session.session_id, session.file_path);
+                    }
+                    CacheEvent::SessionDeleted(session_id) => {
+                        tracing::info!("Cache: Session deleted - {}", session_id);
+                    }
+                }
+            }
+        });
+        
+        // Log initial cache stats
+        if let Some(cache) = &self.claude_cache {
+            let sessions = cache.get_all_sessions().await;
+            tracing::info!("Claude cache loaded with {} historical sessions", sessions.len());
+            
+            // Auto-discover projects from cached sessions
+            for session in sessions {
+                // Check if we already have this project
+                let project_path_str = session.project_path.to_string_lossy().to_string();
+                let project_exists = self.projects.values()
+                    .any(|p| p.path.to_string_lossy() == project_path_str);
+                
+                if !project_exists {
+                    // Auto-create project from cached session
+                    let project_name = session.project_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unnamed")
+                        .to_string();
+                    
+                    let project_id = Uuid::new_v4().to_string();
+                    let project = Project {
+                        id: project_id.clone(),
+                        name: project_name.clone(),
+                        path: session.project_path.clone(),
+                    };
+                    
+                    self.projects.insert(project_id, project);
+                    tracing::info!("Auto-discovered project from cache: {} at {:?}", 
+                        project_name, session.project_path);
+                }
+            }
+        }
+        
+        Ok(())
     }
 
     async fn handle_command(&mut self, command: SessionCommand) {
@@ -242,7 +371,7 @@ impl SessionManagerActor {
                 session_id,
                 response_tx,
             } => {
-                let result = self.get_session(&session_id);
+                let result = self.get_session(&session_id).await;
                 let _ = response_tx.send(result);
             }
             SessionCommand::GetSessionChannels {
@@ -263,6 +392,16 @@ impl SessionManagerActor {
                 let result = self.close_session(&session_id).await;
                 let _ = response_tx.send(result);
             }
+            SessionCommand::ResumeSession {
+                session_id,
+                agent,
+                args,
+                project_id,
+                response_tx,
+            } => {
+                let result = self.resume_session(session_id, agent, args, project_id).await;
+                let _ = response_tx.send(result);
+            }
             SessionCommand::CreateProject {
                 name,
                 path,
@@ -273,6 +412,10 @@ impl SessionManagerActor {
             }
             SessionCommand::ListProjects { response_tx } => {
                 let result = self.list_projects();
+                let _ = response_tx.send(result);
+            }
+            SessionCommand::GetRecentProjectSessions { project_path, response_tx } => {
+                let result = self.get_recent_project_sessions(&project_path).await;
                 let _ = response_tx.send(result);
             }
             SessionCommand::ShutdownAllSessions { response_tx } => {
@@ -402,17 +545,46 @@ impl SessionManagerActor {
             project: resolved_project_id,
             status: "running".to_string(),
             session_type: SessionType::Active,
+            last_modified: Some(chrono::Utc::now().to_rfc3339()),
+            last_message: None, // Active sessions don't have historical messages
         })
     }
 
-    fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
-        self.sessions.get(session_id).map(|state| SessionInfo {
-            id: state.id.clone(),
-            agent: state.agent.clone(),
-            project: state.project_id.clone(),
-            status: "running".to_string(),
-            session_type: SessionType::Active,
-        })
+    async fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
+        // First check active sessions
+        if let Some(state) = self.sessions.get(session_id) {
+            return Some(SessionInfo {
+                id: state.id.clone(),
+                agent: state.agent.clone(),
+                project: state.project_id.clone(),
+                status: "running".to_string(),
+                session_type: SessionType::Active,
+                last_modified: Some(chrono::Utc::now().to_rfc3339()),
+            last_message: None, // Active sessions don't have historical messages
+            });
+        }
+        
+        // If not active, check the cache for historical sessions
+        if let Some(cache) = &self.claude_cache {
+            if let Some(cached_session) = cache.get_session(session_id).await {
+                // Find the project ID for this cached session
+                let project_id = self.projects.values()
+                    .find(|p| p.path == cached_session.project_path)
+                    .map(|p| p.id.clone());
+                
+                return Some(SessionInfo {
+                    id: cached_session.session_id,
+                    agent: cached_session.agent,
+                    project: project_id,
+                    status: if cached_session.is_active { "inactive" } else { "completed" }.to_string(),
+                    session_type: SessionType::Historical,
+                    last_modified: Some(cached_session.last_modified.to_rfc3339()),
+                    last_message: cached_session.last_message.clone(),
+                });
+            }
+        }
+        
+        None
     }
 
     fn get_session_channels(&self, session_id: &str) -> Option<PtyChannels> {
@@ -451,8 +623,80 @@ impl SessionManagerActor {
                 project: state.project_id.clone(),
                 status: "running".to_string(),
                 session_type: SessionType::Active,
+                last_modified: Some(chrono::Utc::now().to_rfc3339()),
+            last_message: None, // Active sessions don't have historical messages
             })
             .collect()
+    }
+
+    async fn resume_session(
+        &mut self,
+        session_id: String,
+        agent: String,
+        args: Vec<String>,
+        project_id: Option<String>,
+    ) -> Result<SessionInfo> {
+        tracing::info!("Resuming session {}", session_id);
+
+        // First, check if the session is already active
+        if self.sessions.contains_key(&session_id) {
+            tracing::warn!("Session {} is already active, returning existing session", session_id);
+            if let Some(session_info) = self.get_session(&session_id).await {
+                return Ok(session_info);
+            }
+        }
+
+        // Check if we have stored session info for this session ID
+        // For now, we'll create a new PTY session with the provided parameters
+        // In a full implementation, we might want to restore from persisted JSONL files
+        
+        tracing::info!("Creating new PTY session for resumed session {}", session_id);
+
+        // Determine project path from project_id
+        let _project_path = if let Some(project_id) = &project_id {
+            self.projects.get(project_id).map(|p| p.path.clone())
+        } else {
+            None
+        };
+
+        // Create a new PTY session
+        let (pty_session, channels) = PtySession::new(
+            session_id.clone(),
+            agent.clone(),
+            args.clone(),
+        )?;
+
+        // Store the session with the specific session_id
+        let session_state = SessionState {
+            id: session_id.clone(),
+            agent: agent.clone(),
+            channels: channels.clone(),
+            project_id: project_id.clone(),
+        };
+
+        self.sessions.insert(session_id.clone(), session_state);
+
+        // Spawn the PTY session start task 
+        let session_id_clone = session_id.clone();
+        tokio::spawn(async move {
+            tracing::info!("Starting resumed PTY session {}", session_id_clone);
+            if let Err(e) = pty_session.start().await {
+                tracing::error!("Resumed PTY session {} failed: {}", session_id_clone, e);
+            }
+        });
+
+        tracing::info!("Successfully resumed session {}", session_id);
+
+        // Return session info
+        Ok(SessionInfo {
+            id: session_id,
+            agent,
+            project: project_id,
+            status: "running".to_string(),
+            session_type: SessionType::Active,
+            last_modified: Some(chrono::Utc::now().to_rfc3339()),
+            last_message: None, // Active sessions don't have historical messages
+        })
     }
 
     async fn close_session(&mut self, session_id: &str) -> Result<()> {
@@ -508,6 +752,40 @@ impl SessionManagerActor {
                 path: p.path.to_string_lossy().to_string(),
             })
             .collect()
+    }
+
+    /// Get the 5 most recent historical sessions for a project from the Claude cache
+    async fn get_recent_project_sessions(&self, project_path: &std::path::Path) -> Vec<crate::core::session::SessionInfo> {
+        if let Some(cache) = &self.claude_cache {
+            let mut sessions = cache.get_project_sessions(project_path).await;
+            
+            // Sort by last_modified (most recent first) and take only 5
+            sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+            sessions.truncate(5);
+            
+            // Convert to SessionInfo
+            sessions
+                .into_iter()
+                .map(|cached_session| {
+                    // Find the project ID for this cached session
+                    let project_id = self.projects.values()
+                        .find(|p| p.path == cached_session.project_path)
+                        .map(|p| p.id.clone());
+                    
+                    crate::core::session::SessionInfo {
+                        id: cached_session.session_id,
+                        agent: cached_session.agent,
+                        project: project_id,
+                        status: if cached_session.is_active { "inactive" } else { "completed" }.to_string(),
+                        session_type: crate::core::session::SessionType::Historical,
+                        last_modified: Some(cached_session.last_modified.to_rfc3339()),
+                    last_message: cached_session.last_message.clone(),
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     async fn shutdown_all_sessions(&mut self) {

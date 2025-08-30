@@ -1,55 +1,11 @@
 use axum::{extract::State, response::IntoResponse, Json};
 use std::path::PathBuf;
-use tokio::fs;
+use chrono::{DateTime, Utc};
 
-use super::json_api::{json_api_response, json_api_error, JsonApiResource};
+use super::json_api::{json_api_response_with_headers, json_api_error_response_with_headers, JsonApiResource};
 use super::types::{AddProjectRequest, AppState};
-use crate::core::session::{ProjectWithSessions, SessionInfo, SessionType};
+use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
 
-/// Find all JSONL sessions for a specific project path
-async fn find_project_jsonl_sessions(project_path: &str) -> Result<Vec<SessionInfo>, std::io::Error> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let claude_projects_path = PathBuf::from(&home).join(".claude").join("projects");
-    
-    if !claude_projects_path.exists() {
-        return Ok(Vec::new());
-    }
-
-    // Convert project path to dash-case folder name
-    let project_name = if let Some(stripped) = project_path.strip_prefix('/') {
-        format!("-{}", stripped.replace('/', "-"))
-    } else {
-        format!("-{}", project_path.replace('/', "-"))
-    };
-    
-    let project_dir = claude_projects_path.join(&project_name);
-    if !project_dir.exists() {
-        return Ok(Vec::new());
-    }
-    
-    let mut sessions = Vec::new();
-    let mut entries = fs::read_dir(&project_dir).await?;
-    
-    while let Some(entry) = entries.next_entry().await? {
-        let file_path = entry.path();
-        if file_path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
-            if let Some(session_id) = file_path
-                .file_stem()
-                .and_then(|s| s.to_str()) 
-            {
-                sessions.push(SessionInfo {
-                    id: session_id.to_string(),
-                    agent: "claude".to_string(), // JSONL files are currently only for Claude
-                    project: None, // Will be set by caller
-                    status: "completed".to_string(),
-                    session_type: SessionType::Historical,
-                });
-            }
-        }
-    }
-    
-    Ok(sessions)
-}
 
 pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
     // Return actual projects with their sessions
@@ -66,23 +22,10 @@ pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
             .cloned()
             .collect();
 
-        // Get historical JSONL sessions for this project
-        if let Ok(jsonl_sessions) = find_project_jsonl_sessions(&project.path).await {
-            // Set the project field for JSONL sessions
-            let jsonl_sessions_with_project: Vec<SessionInfo> = jsonl_sessions
-                .into_iter()
-                .map(|session| {
-                    SessionInfo {
-                        id: session.id,
-                        agent: session.agent,
-                        project: Some(project.id.clone()),
-                        status: session.status,
-                        session_type: session.session_type,
-                    }
-                })
-                .collect();
-            project_sessions.extend(jsonl_sessions_with_project);
-        }
+        // Get the 5 most recent historical sessions for this project from the cache
+        let project_path = PathBuf::from(&project.path);
+        let recent_sessions = state.session_manager.get_recent_project_sessions(project_path).await;
+        project_sessions.extend(recent_sessions);
 
         projects_with_sessions.push(ProjectWithSessions {
             id: project.id,
@@ -92,13 +35,36 @@ pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
         });
     }
 
+    // Sort projects by most recent session timestamp
+    projects_with_sessions.sort_by(|a, b| {
+        let a_latest = a.sessions.iter()
+            .filter_map(|s| s.last_modified.as_ref())
+            .filter_map(|ts| DateTime::parse_from_rfc3339(ts).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .max();
+            
+        let b_latest = b.sessions.iter()
+            .filter_map(|s| s.last_modified.as_ref())
+            .filter_map(|ts| DateTime::parse_from_rfc3339(ts).ok())
+            .map(|dt| dt.with_timezone(&Utc))
+            .max();
+            
+        // Sort by most recent first (descending)
+        match (b_latest, a_latest) {
+            (Some(b_time), Some(a_time)) => b_time.cmp(&a_time),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.name.cmp(&b.name), // Fallback to name sorting
+        }
+    });
+
     // Convert to JSON API format
-    let resources: Vec<JsonApiResource> = projects_with_sessions
+    let resources: Vec<JsonApiResource<ProjectWithSessions>> = projects_with_sessions
         .into_iter()
         .map(|project| project.into())
         .collect();
     
-    Json(json_api_response(resources))
+    json_api_response_with_headers(resources)
 }
 
 pub async fn add_project(
@@ -111,16 +77,15 @@ pub async fn add_project(
         .await
     {
         Ok(info) => {
-            let resource: JsonApiResource = info.into();
-            Json(json_api_response(resource)).into_response()
+            let resource: JsonApiResource<ProjectInfo> = info.into();
+            json_api_response_with_headers(resource)
         }
         Err(e) => {
-            Json(json_api_error(
-                "500".to_string(),
+            json_api_error_response_with_headers(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Project Creation Failed".to_string(),
                 e.to_string(),
-            ))
-            .into_response()
+            )
         }
     }
 }

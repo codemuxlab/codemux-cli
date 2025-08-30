@@ -9,8 +9,9 @@ use axum::{
 use futures::stream::Stream;
 use std::convert::Infallible;
 
-use super::json_api::{json_api_response, json_api_error, JsonApiResource};
+use super::json_api::{json_api_response_with_headers, json_api_error_response_with_headers, JsonApiResource};
 use super::types::{AppState, CreateSessionRequest};
+use crate::core::session::SessionInfo;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
@@ -101,17 +102,16 @@ pub async fn create_session(
     {
         Ok(info) => {
             tracing::info!("Session created successfully: {}", info.id);
-            let resource: JsonApiResource = info.into();
-            Json(json_api_response(resource)).into_response()
+            let resource: JsonApiResource<SessionInfo> = info.into();
+            json_api_response_with_headers(resource)
         }
         Err(e) => {
             tracing::error!("Failed to create session: {}", e);
-            Json(json_api_error(
-                "500".to_string(),
+            json_api_error_response_with_headers(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 "Session Creation Failed".to_string(),
                 e.to_string(),
-            ))
-            .into_response()
+            )
         }
     }
 }
@@ -122,15 +122,14 @@ pub async fn get_session(
 ) -> impl IntoResponse {
     match state.session_manager.get_session(&id).await {
         Some(info) => {
-            let resource: JsonApiResource = info.into();
-            Json(json_api_response(resource)).into_response()
+            let resource: JsonApiResource<SessionInfo> = info.into();
+            json_api_response_with_headers(resource)
         }
-        None => Json(json_api_error(
-            "404".to_string(),
+        None => json_api_error_response_with_headers(
+            axum::http::StatusCode::NOT_FOUND,
             "Session Not Found".to_string(),
             format!("Session with id '{}' not found", id),
-        ))
-        .into_response(),
+        ),
     }
 }
 
@@ -139,16 +138,14 @@ pub async fn delete_session(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     match state.session_manager.close_session(&id).await {
-        Ok(_) => Json(json_api_response(serde_json::json!({
+        Ok(_) => json_api_response_with_headers(serde_json::json!({
             "message": "Session closed successfully"
-        })))
-        .into_response(),
-        Err(e) => Json(json_api_error(
-            "500".to_string(),
+        })),
+        Err(e) => json_api_error_response_with_headers(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             "Session Deletion Failed".to_string(),
             e.to_string(),
-        ))
-        .into_response(),
+        ),
     }
 }
 

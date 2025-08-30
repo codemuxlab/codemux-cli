@@ -9,6 +9,8 @@ pub struct SessionInfo {
     pub project: Option<String>,
     pub status: String,
     pub session_type: SessionType,
+    pub last_modified: Option<String>, // ISO 8601 timestamp string
+    pub last_message: Option<String>,  // Most recent message from session
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

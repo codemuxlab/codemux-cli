@@ -26,21 +26,55 @@ async fn handle_socket(
         session_id
     );
 
-    // Get PTY channels from session manager
+    // Get PTY channels from session manager or resume the session
     tracing::debug!("WebSocket requesting channels for session: {}", session_id);
     let pty_channels = if let Some(channels) = state
         .session_manager
         .get_session_channels(&session_id)
         .await
     {
-        tracing::debug!("WebSocket found channels for session: {}", session_id);
+        tracing::debug!("WebSocket found active channels for session: {}", session_id);
         channels
     } else {
-        tracing::error!(
-            "WebSocket: No PTY channels found for session: {} - session may not exist or failed to start",
-            session_id
-        );
-        return;
+        tracing::info!("WebSocket: No active session found for {}, attempting to resume...", session_id);
+        
+        // Try to get session info to see if it exists but is inactive
+        if let Some(session_info) = state.session_manager.get_session(&session_id).await {
+            tracing::info!("WebSocket: Found inactive session {}, resuming...", session_id);
+            
+            // Resume the session by creating a new PTY session with the same ID
+            match state.session_manager.resume_session(
+                session_id.clone(),
+                session_info.agent.clone(),
+                vec![], // Resume with empty args
+                session_info.project.clone(),
+            ).await {
+                Ok(_resumed_session) => {
+                    tracing::info!("WebSocket: Successfully resumed session {}", session_id);
+                    // Get the channels for the resumed session
+                    if let Some(channels) = state
+                        .session_manager
+                        .get_session_channels(&session_id)
+                        .await
+                    {
+                        channels
+                    } else {
+                        tracing::error!("WebSocket: Failed to get channels for resumed session {}", session_id);
+                        return;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("WebSocket: Failed to resume session {}: {}", session_id, e);
+                    return;
+                }
+            }
+        } else {
+            tracing::error!(
+                "WebSocket: Session {} not found - may have been deleted or never existed",
+                session_id
+            );
+            return;
+        }
     };
 
     // Send initial connection message

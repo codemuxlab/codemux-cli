@@ -51,11 +51,11 @@ ts-bindings:
     cargo test export_bindings
 
 # Lint React Native app
-app-lint: ts-bindings
+lint-app: ts-bindings
     cd app && npm run lint
 
 # Lint both Rust and React app
-lint-all: clippy app-lint
+lint: clippy lint-app
 
 # Install to local system
 install:
@@ -82,7 +82,7 @@ watch-test:
     cargo watch -x test
 
 # Full CI pipeline
-ci: fmt lint-all test release
+ci: fmt lint test release
 
 # Setup development environment
 setup:

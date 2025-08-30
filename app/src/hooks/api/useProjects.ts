@@ -11,7 +11,7 @@ import type { CreateProjectRequest, ProjectInfo } from "../../types/api";
 export const useProjects = (enabled = true) => {
 	return useQuery({
 		queryKey: queryKeys.projects(),
-		queryFn: api.projects.list,
+		queryFn: () => api.projects.list(),
 		enabled,
 		staleTime: 60 * 1000, // Projects don't change as frequently as sessions
 		meta: {

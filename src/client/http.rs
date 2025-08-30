@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
@@ -27,6 +27,86 @@ pub struct CreateSessionRequest {
 pub struct CreateProjectRequest {
     pub name: String,
     pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonApiDocument<T> {
+    data: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonApiResource<T> {
+    #[serde(rename = "type")]
+    #[allow(dead_code)]
+    resource_type: String,
+    #[allow(dead_code)]
+    id: String,
+    attributes: Option<T>,
+}
+
+impl CodeMuxClient {
+    /// Extract data from JSON API response
+    #[allow(dead_code)]
+    async fn extract_from_json_api_response<T>(response: reqwest::Response) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response_text = response.text().await?;
+        
+        // Try JSON API format first
+        if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<T>>(&response_text) {
+            return Ok(json_api.data);
+        }
+
+        // If that failed, try direct format (backwards compatibility)
+        let data: T = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
+        Ok(data)
+    }
+
+    /// Extract data from JSON API resource response 
+    async fn extract_from_json_api_resource<T>(response: reqwest::Response) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response_text = response.text().await?;
+        
+        // Try JSON API resource format first
+        if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<JsonApiResource<T>>>(&response_text) {
+            if let Some(attributes) = json_api.data.attributes {
+                return Ok(attributes);
+            }
+        }
+
+        // If that failed, try direct format (backwards compatibility)
+        let data: T = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
+        Ok(data)
+    }
+
+    /// Extract array data from JSON API resource array response
+    async fn extract_from_json_api_resource_array<T>(response: reqwest::Response) -> Result<Vec<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let response_text = response.text().await?;
+        
+        // Try JSON API resource array format first
+        if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<Vec<JsonApiResource<T>>>>(&response_text) {
+            let mut results = Vec::new();
+            for resource in json_api.data {
+                if let Some(attributes) = resource.attributes {
+                    results.push(attributes);
+                }
+            }
+            return Ok(results);
+        }
+
+        // If that failed, try direct format (backwards compatibility)
+        let data: Vec<T> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
+        Ok(data)
+    }
 }
 
 impl CodeMuxClient {
@@ -231,7 +311,7 @@ impl CodeMuxClient {
             return Err(anyhow!("Failed to create project: {}", response.status()));
         }
 
-        let project: ProjectInfo = response.json().await?;
+        let project = Self::extract_from_json_api_resource(response).await?;
         Ok(project)
     }
 
@@ -247,7 +327,7 @@ impl CodeMuxClient {
             return Err(anyhow!("Failed to list projects: {}", response.status()));
         }
 
-        let projects: Vec<ProjectWithSessions> = response.json().await?;
+        let projects = Self::extract_from_json_api_resource_array(response).await?;
         Ok(projects)
     }
 
