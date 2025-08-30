@@ -1,20 +1,15 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
+import type {
+	GridCell as GeneratedGridCell,
+	KeyCode,
+	KeyEvent,
+	KeyModifiers,
+	TerminalColor,
+} from "../types/bindings";
 
-export type TerminalColor =
-	| "Default"
-	| { Indexed: number }
-	| { Palette: number }
-	| { Rgb: { r: number; g: number; b: number } };
-
-export interface GridCell {
-	char: string;
-	fg_color: TerminalColor | null;
-	bg_color: TerminalColor | null;
-	bold: boolean;
-	italic: boolean;
-	underline: boolean;
-	reverse: boolean;
+// Extend the generated GridCell with cursor tracking for the frontend
+export interface GridCell extends GeneratedGridCell {
 	has_cursor?: boolean;
 }
 
@@ -109,36 +104,10 @@ export const monochromeTheme: TerminalTheme = {
 
 export const availableThemes = [defaultTheme, lightTheme, monochromeTheme];
 
-// Web key event types (matching backend)
-export interface WebKeyModifiers {
-	shift: boolean;
-	ctrl: boolean;
-	alt: boolean;
-	meta: boolean;
-}
-
-export type WebKeyCode =
-	| { Char: string }
-	| "Backspace"
-	| "Enter"
-	| "Left"
-	| "Right"
-	| "Up"
-	| "Down"
-	| "Home"
-	| "End"
-	| "PageUp"
-	| "PageDown"
-	| "Tab"
-	| "Delete"
-	| "Insert"
-	| { F: number }
-	| "Esc";
-
-export interface WebKeyEvent {
-	code: WebKeyCode;
-	modifiers: WebKeyModifiers;
-}
+// Re-export key event types from bindings for backward compatibility
+export type WebKeyModifiers = KeyModifiers;
+export type WebKeyCode = KeyCode;
+export type WebKeyEvent = KeyEvent;
 
 interface TerminalState {
 	size: { rows: number; cols: number };
@@ -154,7 +123,16 @@ interface TerminalState {
 	updateCursor: (row: number, col: number) => void;
 	setCursorVisible: (visible: boolean) => void;
 	clearCells: () => void;
-	handleGridUpdate: (message: { type: string; [key: string]: unknown }) => void;
+	handleGridUpdate: (message: {
+		type: string;
+		size?: { rows: number; cols: number };
+		cells?:
+			| Array<[number, number, Partial<GeneratedGridCell>]>
+			| Array<[[number, number], Partial<GeneratedGridCell>]>;
+		cursor?: { row: number; col: number };
+		cursor_visible?: boolean;
+		[key: string]: unknown;
+	}) => void;
 	setTheme: (theme: TerminalTheme) => void;
 	resolveColor: (color: TerminalColor | null, isBackground?: boolean) => string;
 }
@@ -242,7 +220,16 @@ export const useTerminalStore = create<TerminalState>()(
 				cells: new Map(),
 			})),
 
-		handleGridUpdate: (message) =>
+		handleGridUpdate: (message: {
+			type: string;
+			size?: { rows: number; cols: number };
+			cells?:
+				| Array<[number, number, Partial<GeneratedGridCell>]>
+				| Array<[[number, number], Partial<GeneratedGridCell>]>;
+			cursor?: { row: number; col: number };
+			cursor_visible?: boolean;
+			[key: string]: unknown;
+		}) =>
 			set((state) => {
 				console.log("Store handleGridUpdate called:", message);
 				const updates: Partial<TerminalState> = {};
@@ -264,22 +251,45 @@ export const useTerminalStore = create<TerminalState>()(
 					const newCells = new Map(state.cells);
 					console.log("Processing", message.cells.length, "cell updates");
 
-					message.cells.forEach(
-						([row, col, cell]: [number, number, Partial<GridCell>]) => {
-							// Reconstruct full GridCell with defaults for omitted values
-							const fullCell: GridCell = {
-								char: cell.char ?? " ",
-								fg_color: cell.fg_color ?? null,
-								bg_color: cell.bg_color ?? null,
-								bold: cell.bold ?? false,
-								italic: cell.italic ?? false,
-								underline: cell.underline ?? false,
-								reverse: cell.reverse ?? false,
-							};
+					message.cells.forEach((cellUpdate) => {
+						let row: number;
+						let col: number;
+						let cell: Partial<GeneratedGridCell>;
 
-							newCells.set(`${row}-${col}`, fullCell);
-						},
-					);
+						// Handle both keyframe format [[row, col], cell] and diff format [row, col, cell]
+						if (cellUpdate.length === 2) {
+							// Keyframe format: [[row, col], cell]
+							const [position, cellData] = cellUpdate as [
+								[number, number],
+								Partial<GeneratedGridCell>,
+							];
+							[row, col] = position;
+							cell = cellData;
+						} else {
+							// Diff format: [row, col, cell]
+							const [r, c, cellData] = cellUpdate as [
+								number,
+								number,
+								Partial<GeneratedGridCell>,
+							];
+							row = r;
+							col = c;
+							cell = cellData;
+						}
+
+						// Reconstruct full GridCell with defaults for omitted values
+						const fullCell: GridCell = {
+							char: cell.char ?? " ",
+							fg_color: cell.fg_color ?? null,
+							bg_color: cell.bg_color ?? null,
+							bold: cell.bold ?? false,
+							italic: cell.italic ?? false,
+							underline: cell.underline ?? false,
+							reverse: cell.reverse ?? false,
+						};
+
+						newCells.set(`${row}-${col}`, fullCell);
+					});
 
 					console.log("Total cells in map after update:", newCells.size);
 					updates.cells = newCells;

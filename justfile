@@ -46,12 +46,16 @@ clippy:
 fmt:
     cargo fmt
 
+# Generate TypeScript bindings from Rust structs
+ts-bindings:
+    cargo test export_bindings
+
 # Lint React Native app
-app-lint:
+lint-app: ts-bindings
     cd app && npm run lint
 
 # Lint both Rust and React app
-lint-all: clippy app-lint
+lint: clippy lint-app
 
 # Install to local system
 install:
@@ -78,7 +82,7 @@ watch-test:
     cargo watch -x test
 
 # Full CI pipeline
-ci: fmt lint-all test release
+ci: fmt lint test release
 
 # Setup development environment
 setup:
@@ -97,14 +101,14 @@ capture-record agent output:
 capture-analyze file:
     SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --analyze {{file}} --verbose
 
-# Start daemon mode
-daemon:
-    cargo run --bin codemux -- daemon
+# Start server mode
+server:
+    cargo run --bin codemux -- server start
 
-# Add project to daemon
+# Add project to server
 add-project path:
     cargo run --bin codemux -- add-project {{path}}
 
-# List daemon projects
+# List server projects
 list:
     cargo run --bin codemux -- list

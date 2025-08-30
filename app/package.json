@@ -9,7 +9,7 @@
 		"web": "expo start --web",
 		"build": "npx expo export -p web",
 		"deploy": "npx expo export -p web && npx eas-cli@latest deploy",
-		"lint": "biome check --write",
+		"lint": "biome check --write && npm run typecheck",
 		"format": "biome format --write",
 		"typecheck": "tsc --noEmit"
 	},

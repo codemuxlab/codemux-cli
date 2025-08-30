@@ -232,6 +232,21 @@ impl JsonlRecorder {
         Ok(())
     }
 
+    /// Get session metadata
+    pub fn metadata(&self) -> &SessionMetadata {
+        &self.metadata
+    }
+
+    /// Get session start time
+    pub fn start_time(&self) -> SystemTime {
+        self.start_time
+    }
+
+    /// Get elapsed time since session start
+    pub fn elapsed_time(&self) -> Duration {
+        self.start_time.elapsed().unwrap_or(Duration::ZERO)
+    }
+
     /// Finalize the recording
     pub fn finalize(mut self) -> Result<()> {
         self.writer.flush()?;

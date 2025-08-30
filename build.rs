@@ -16,7 +16,7 @@ fn find_npm_command() -> &'static str {
                 "C:\\Program Files (x86)\\nodejs\\npm.cmd",
                 "C:\\ProgramData\\chocolatey\\lib\\nodejs\\tools\\npm.cmd",
             ];
-            
+
             for path in &potential_paths {
                 if Path::new(path).exists() {
                     return path;
@@ -45,7 +45,7 @@ fn main() {
 
     // Check if web assets already exist (from CI artifact)
     if Path::new("app/dist").exists() {
-        println!("cargo:warning=Using pre-built React Native Web assets from artifact");
+        println!("cargo:info=Using pre-built React Native Web assets from artifact");
         println!("cargo:rustc-env=REACT_APP_DIR=app/dist");
         return;
     }

@@ -2,6 +2,8 @@ import React, { memo } from "react";
 import { Text } from "react-native";
 import { useTerminalStore } from "../stores/terminalStore";
 
+// GridCell type is accessed through the terminal store, which now uses generated bindings
+
 interface TerminalCellProps {
 	row: number;
 	col: number;

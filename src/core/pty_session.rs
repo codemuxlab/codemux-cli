@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, Mutex};
+use ts_rs::TS;
 
 /// Default PTY dimensions
 pub const DEFAULT_PTY_COLS: u16 = 80;
@@ -24,8 +25,41 @@ pub enum PtyControlMessage {
     },
 }
 
+/// Internal control messages for PTY session coordination
+#[derive(Debug)]
+enum InternalControlMessage {
+    TriggerGridUpdate,
+    ResetScroll,
+}
+
+/// Throttling for scroll keyframe updates
+struct ScrollThrottle {
+    last_update: std::time::Instant,
+    min_interval: std::time::Duration,
+}
+
+impl ScrollThrottle {
+    fn new() -> Self {
+        Self {
+            last_update: std::time::Instant::now() - std::time::Duration::from_millis(100),
+            min_interval: std::time::Duration::from_millis(50), // 20 FPS max
+        }
+    }
+    
+    fn should_update(&mut self) -> bool {
+        let now = std::time::Instant::now();
+        if now.duration_since(self.last_update) >= self.min_interval {
+            self.last_update = now;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Key event modifiers
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct KeyModifiers {
     pub shift: bool,
     pub ctrl: bool,
@@ -34,7 +68,8 @@ pub struct KeyModifiers {
 }
 
 /// Key codes that can be sent to terminal
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub enum KeyCode {
     /// A character key
     Char(char),
@@ -71,23 +106,36 @@ pub enum KeyCode {
 }
 
 /// Key event structure
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct KeyEvent {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
 }
 
-/// Input message that can be either raw bytes or key events
+/// Direction for scroll events
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum ScrollDirection {
+    Up,
+    Down,
+}
+
+/// Input message for key events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PtyInput {
-    /// Raw byte data (legacy mode)
-    Raw { data: Vec<u8>, client_id: String },
-    /// Key event (preferred mode)
+    /// Key event
     Key { event: KeyEvent, client_id: String },
+    /// Scroll event
+    Scroll {
+        direction: ScrollDirection,
+        lines: u16,
+        client_id: String,
+    },
 }
 
 /// Messages representing PTY input from clients
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PtyInputMessage {
     pub input: PtyInput,
 }
@@ -100,7 +148,8 @@ pub struct PtyOutputMessage {
 }
 
 /// Serializable version of PtySize for grid messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SerializablePtySize {
     pub rows: u16,
     pub cols: u16,
@@ -116,24 +165,26 @@ impl From<PtySize> for SerializablePtySize {
 }
 
 /// Terminal grid cell representation
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub struct GridCell {
     pub char: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub fg_color: Option<TerminalColor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bg_color: Option<TerminalColor>,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub bold: bool,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub italic: bool,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub underline: bool,
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(skip_serializing_if = "is_false", default)]
     pub reverse: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub enum TerminalColor {
     /// Default terminal color (use theme default)
     Default,
@@ -164,14 +215,18 @@ fn is_false(b: &bool) -> bool {
 }
 
 /// Terminal grid update messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum GridUpdateMessage {
     /// Full terminal state keyframe (sent to new clients)
     Keyframe {
         size: SerializablePtySize,
-        cells: HashMap<(u16, u16), GridCell>, // (row, col) -> cell
-        cursor: (u16, u16),                   // (row, col)
-        cursor_visible: bool,                 // whether cursor is visible
+        cells: Vec<((u16, u16), GridCell)>, // (row, col) -> cell
+        cursor: (u16, u16),                 // (row, col)
+        cursor_visible: bool,               // whether cursor is visible
+        scrollback_position: usize, // how many lines scrolled back from bottom (0 = at bottom)
+        scrollback_total: usize,    // total lines available in scrollback buffer
+        #[ts(type = "string")]
         timestamp: std::time::SystemTime,
     },
     /// Incremental changes (sent to existing clients)
@@ -179,6 +234,9 @@ pub enum GridUpdateMessage {
         changes: Vec<(u16, u16, GridCell)>, // (row, col, new_cell)
         cursor: Option<(u16, u16)>,         // new cursor position if changed
         cursor_visible: Option<bool>,       // cursor visibility if changed
+        scrollback_position: Option<usize>, // scrollback position if changed
+        scrollback_total: Option<usize>,    // scrollback total if changed
+        #[ts(type = "string")]
         timestamp: std::time::SystemTime,
     },
 }
@@ -198,16 +256,30 @@ impl PtyChannels {
     pub async fn request_keyframe(
         &self,
     ) -> Result<GridUpdateMessage, Box<dyn std::error::Error + Send + Sync>> {
+        tracing::debug!("PtyChannels::request_keyframe - Creating oneshot channel");
         let (tx, rx) = tokio::sync::oneshot::channel();
 
+        tracing::debug!("PtyChannels::request_keyframe - Sending control message");
         self.control_tx
             .send(PtyControlMessage::RequestKeyframe { response_tx: tx })
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            .map_err(|e| {
+                tracing::error!(
+                    "PtyChannels::request_keyframe - Failed to send control message: {}",
+                    e
+                );
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
 
-        let keyframe = rx
-            .await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        tracing::debug!("PtyChannels::request_keyframe - Waiting for response");
+        let keyframe = rx.await.map_err(|e| {
+            tracing::error!(
+                "PtyChannels::request_keyframe - Failed to receive response: {}",
+                e
+            );
+            Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+        })?;
 
+        tracing::debug!("PtyChannels::request_keyframe - Received keyframe successfully");
         Ok(keyframe)
     }
 }
@@ -331,7 +403,7 @@ impl PtySession {
             vt_parser: Arc::new(Mutex::new(vt100::Parser::new(
                 initial_rows,
                 initial_cols,
-                0,
+                10000, // Enable scrollback buffer with 10,000 lines
             ))),
             grid_state: Arc::new(Mutex::new(HashMap::new())),
             cursor_pos: Arc::new(Mutex::new((0, 0))),
@@ -350,6 +422,10 @@ impl PtySession {
     /// Start the PTY session tasks - runs until completion or error
     pub async fn start(self) -> Result<()> {
         tracing::info!("Starting PTY session tasks for agent: {}", self.agent);
+
+        // Create internal control channel for coordination between tasks
+        let (internal_control_tx, internal_control_rx) =
+            mpsc::unbounded_channel::<InternalControlMessage>();
 
         // Extract all channels and state before creating tasks
         let PtySession {
@@ -493,7 +569,7 @@ impl PtySession {
                                 let parser_guard = processor_vt_parser.lock().await;
                                 let screen = parser_guard.screen();
                                 let cursor_pos = (screen.cursor_position().0, screen.cursor_position().1);
-                                tracing::debug!("Cursor BEFORE processing: ({}, {})", cursor_pos.0, cursor_pos.1);
+                                tracing::trace!("Cursor BEFORE processing: ({}, {})", cursor_pos.0, cursor_pos.1);
                                 cursor_pos
                             };
 
@@ -528,7 +604,7 @@ impl PtySession {
                                 let mut cursor_vis_guard = processor_cursor_visible.lock().await;
                                 if *cursor_vis_guard != vt_cursor_visible {
                                     *cursor_vis_guard = vt_cursor_visible;
-                                    tracing::debug!("Cursor visibility changed to: {}", vt_cursor_visible);
+                                    tracing::trace!("Cursor visibility changed to: {}", vt_cursor_visible);
                                 }
                             }
 
@@ -544,12 +620,12 @@ impl PtySession {
                             let parser_guard = processor_vt_parser.lock().await;
                             let screen = parser_guard.screen();
                             let cursor_pos = (screen.cursor_position().0, screen.cursor_position().1);
-                            tracing::debug!("Cursor AFTER processing: ({}, {})", cursor_pos.0, cursor_pos.1);
+                            tracing::trace!("Cursor AFTER processing: ({}, {})", cursor_pos.0, cursor_pos.1);
                             cursor_pos
                         };
 
                         if cursor_before != cursor_after {
-                            tracing::debug!("Cursor moved during processing: ({}, {}) -> ({}, {})",
+                            tracing::trace!("Cursor moved during processing: ({}, {}) -> ({}, {})",
                                 cursor_before.0, cursor_before.1, cursor_after.0, cursor_after.1);
                         }
 
@@ -691,26 +767,77 @@ impl PtySession {
 
         // Create input handler task
         let input_writer = writer.clone();
+        let input_vt_parser = vt_parser.clone();
+        let input_internal_tx = internal_control_tx.clone();
         let input_task = tokio::spawn(async move {
             let mut input_rx = input_rx;
             while let Some(msg) = input_rx.recv().await {
-                let bytes = match &msg.input {
-                    PtyInput::Raw { data, .. } => {
-                        tracing::debug!("Processing raw input: {} bytes", data.len());
-                        data.clone()
-                    }
+                match &msg.input {
                     PtyInput::Key { event, .. } => {
                         tracing::debug!("Processing key event: {:?}", event);
-                        Self::key_event_to_bytes(event)
-                    }
-                };
+                        
+                        // Reset scroll position on any key press to return to current content
+                        if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll) {
+                            tracing::warn!("Failed to send scroll reset message: {}", e);
+                        } else {
+                            tracing::debug!("Sent scroll reset on key press");
+                        }
+                        
+                        let bytes = Self::key_event_to_bytes(event);
 
-                let mut writer_guard = input_writer.lock().await;
-                if let Err(e) = writer_guard.write_all(&bytes) {
-                    tracing::error!("Failed to write to PTY: {}", e);
-                    break;
+                        let mut writer_guard = input_writer.lock().await;
+                        if let Err(e) = writer_guard.write_all(&bytes) {
+                            tracing::error!("Failed to write to PTY: {}", e);
+                            break;
+                        }
+                        let _ = writer_guard.flush();
+                    }
+                    PtyInput::Scroll {
+                        direction, lines, ..
+                    } => {
+                        tracing::debug!("Processing scroll event: {:?} {} lines", direction, lines);
+
+                        // Use VT100 parser's built-in scrollback - it handles bounds internally
+                        {
+                            let mut parser_guard = input_vt_parser.lock().await;
+                            let current_scrollback = parser_guard.screen().scrollback();
+
+                            match direction {
+                                ScrollDirection::Up => {
+                                    let new_scrollback = current_scrollback + *lines as usize;
+                                    parser_guard.set_scrollback(new_scrollback);
+                                    tracing::debug!(
+                                        "Scrolled up from {} to {}",
+                                        current_scrollback,
+                                        new_scrollback
+                                    );
+                                }
+                                ScrollDirection::Down => {
+                                    let new_scrollback =
+                                        current_scrollback.saturating_sub(*lines as usize);
+                                    parser_guard.set_scrollback(new_scrollback);
+                                    tracing::debug!(
+                                        "Scrolled down from {} to {}",
+                                        current_scrollback,
+                                        new_scrollback
+                                    );
+                                }
+                            }
+                        }
+
+                        // Trigger a grid update since the view has changed
+                        if let Err(e) =
+                            input_internal_tx.send(InternalControlMessage::TriggerGridUpdate)
+                        {
+                            tracing::warn!(
+                                "Failed to send internal control message after scroll: {}",
+                                e
+                            );
+                        } else {
+                            tracing::debug!("Scroll event processed, sent trigger to main control");
+                        }
+                    }
                 }
-                let _ = writer_guard.flush();
             }
         });
 
@@ -718,72 +845,143 @@ impl PtySession {
         let control_pty = pty.clone();
         let control_current_size = current_size.clone();
         let control_size_tx = size_tx.clone();
+        let control_grid_tx = grid_tx.clone();
         let control_vt_parser = vt_parser.clone();
         let control_cursor_pos = cursor_pos.clone();
         let control_cursor_visible = cursor_visible.clone();
 
         let control_task = tokio::spawn(async move {
+            tracing::info!("PTY Control task - Starting control message loop");
             let mut control_rx = control_rx;
-            while let Some(msg) = control_rx.recv().await {
-                match msg {
-                    PtyControlMessage::Resize { rows, cols } => {
-                        tracing::debug!("Processing resize request to {}x{}", cols, rows);
+            let mut internal_control_rx = internal_control_rx;
+            let mut scroll_throttle = ScrollThrottle::new();
 
-                        // Update PTY size
-                        let new_size = PtySize {
-                            rows,
-                            cols,
-                            pixel_width: 0,
-                            pixel_height: 0,
-                        };
+            loop {
+                tokio::select! {
+                    msg = control_rx.recv() => {
+                        let Some(msg) = msg else { break; };
+                        tracing::debug!(
+                            "PTY Control task - Received control message: {:?}",
+                            std::mem::discriminant(&msg)
+                        );
+                        match msg {
+                            PtyControlMessage::Resize { rows, cols } => {
+                                tracing::debug!("Processing resize request to {}x{}", cols, rows);
 
-                        {
-                            let pty_guard = control_pty.lock().await;
-                            if let Err(e) = pty_guard.resize(new_size) {
-                                tracing::error!("Failed to resize PTY to {}x{}: {}", cols, rows, e);
-                            } else {
-                                tracing::debug!("Successfully resized PTY to {}x{}", cols, rows);
+                                // Update PTY size
+                                let new_size = PtySize {
+                                    rows,
+                                    cols,
+                                    pixel_width: 0,
+                                    pixel_height: 0,
+                                };
+
+                                {
+                                    let pty_guard = control_pty.lock().await;
+                                    if let Err(e) = pty_guard.resize(new_size) {
+                                        tracing::error!("Failed to resize PTY to {}x{}: {}", cols, rows, e);
+                                    } else {
+                                        tracing::debug!("Successfully resized PTY to {}x{}", cols, rows);
+                                    }
+                                }
+
+                                // Update current size tracking
+                                {
+                                    let mut size_guard = control_current_size.lock().await;
+                                    *size_guard = new_size;
+                                }
+
+                                // Update VT100 parser size
+                                {
+                                    let mut parser_guard = control_vt_parser.lock().await;
+                                    parser_guard.set_size(rows, cols);
+                                }
+
+                                // Broadcast the new size to subscribers
+                                let _ = control_size_tx.send(new_size);
+                            }
+                            PtyControlMessage::Terminate => {
+                                tracing::info!("PTY session termination requested");
+                                break;
+                            }
+                            PtyControlMessage::RequestKeyframe { response_tx } => {
+                                tracing::debug!("Control task - Keyframe requested by client");
+                                let keyframe = Self::generate_keyframe(
+                                    &control_vt_parser,
+                                    &control_cursor_pos,
+                                    &control_cursor_visible,
+                                    &control_current_size,
+                                )
+                                .await;
+
+                                tracing::debug!("Control task - Generated keyframe, sending response");
+                                // Send keyframe directly to the requesting client
+                                if response_tx.send(keyframe).is_err() {
+                                    tracing::warn!(
+                                        "Control task - Failed to send keyframe to requesting client (receiver dropped)"
+                                    );
+                                } else {
+                                    tracing::debug!("Control task - Keyframe sent successfully to client");
+                                }
                             }
                         }
-
-                        // Update current size tracking
-                        {
-                            let mut size_guard = control_current_size.lock().await;
-                            *size_guard = new_size;
-                        }
-
-                        // Update VT100 parser size
-                        {
-                            let mut parser_guard = control_vt_parser.lock().await;
-                            parser_guard.set_size(rows, cols);
-                        }
-
-                        // Broadcast the new size to subscribers
-                        let _ = control_size_tx.send(new_size);
                     }
-                    PtyControlMessage::Terminate => {
-                        tracing::info!("PTY session termination requested");
-                        break;
-                    }
-                    PtyControlMessage::RequestKeyframe { response_tx } => {
-                        tracing::debug!("Keyframe requested by specific client");
-                        let keyframe = Self::generate_keyframe(
-                            &control_vt_parser,
-                            &control_cursor_pos,
-                            &control_cursor_visible,
-                            &control_current_size,
-                        )
-                        .await;
+                    internal_msg = internal_control_rx.recv() => {
+                        let Some(internal_msg) = internal_msg else { break; };
+                        tracing::debug!("PTY Control task - Received internal control message: {:?}", internal_msg);
 
-                        // Send keyframe directly to the requesting client
-                        if response_tx.send(keyframe).is_err() {
-                            tracing::warn!(
-                                "Failed to send keyframe to requesting client (receiver dropped)"
-                            );
+                        match internal_msg {
+                            InternalControlMessage::TriggerGridUpdate => {
+                                // Throttle scroll updates to avoid overwhelming the system
+                                if scroll_throttle.should_update() {
+                                    tracing::debug!("Control task - Triggering grid update after scroll");
+                                    let keyframe = Self::generate_keyframe(
+                                        &control_vt_parser,
+                                        &control_cursor_pos,
+                                        &control_cursor_visible,
+                                        &control_current_size,
+                                    )
+                                    .await;
+
+                                    // Send keyframe to the same channel that sends diffs
+                                    if let Err(e) = control_grid_tx.send(keyframe) {
+                                        tracing::warn!("Failed to send scroll keyframe to grid channel: {}", e);
+                                    } else {
+                                        tracing::debug!("Scroll keyframe sent to grid channel");
+                                    }
+                                } else {
+                                    tracing::trace!("Scroll update throttled - too soon since last update");
+                                }
+                            }
+                            InternalControlMessage::ResetScroll => {
+                                tracing::debug!("Control task - Resetting scroll position on key press");
+                                
+                                // Reset scrollback to 0 (current content)
+                                {
+                                    let mut parser_guard = control_vt_parser.lock().await;
+                                    parser_guard.set_scrollback(0);
+                                }
+                                
+                                // Generate and send keyframe with reset scroll position
+                                let keyframe = Self::generate_keyframe(
+                                    &control_vt_parser,
+                                    &control_cursor_pos,
+                                    &control_cursor_visible,
+                                    &control_current_size,
+                                )
+                                .await;
+
+                                if let Err(e) = control_grid_tx.send(keyframe) {
+                                    tracing::warn!("Failed to send scroll reset keyframe to grid channel: {}", e);
+                                } else {
+                                    tracing::debug!("Scroll reset keyframe sent to grid channel");
+                                }
+                            }
                         }
                     }
                 }
             }
+            tracing::info!("PTY Control task - Exiting control message loop (channel closed)");
         });
 
         // Note: Automatic keyframes removed - keyframes are only sent on client request
@@ -962,7 +1160,7 @@ impl PtySession {
         let cursor_changed = old_cursor != new_cursor;
 
         if cursor_changed {
-            tracing::debug!(
+            tracing::trace!(
                 "Cursor position changed: ({}, {}) -> ({}, {})",
                 old_cursor.0,
                 old_cursor.1,
@@ -970,7 +1168,7 @@ impl PtySession {
                 new_cursor.1
             );
         } else {
-            tracing::debug!(
+            tracing::trace!(
                 "Cursor position stable at: ({}, {})",
                 new_cursor.0,
                 new_cursor.1
@@ -993,6 +1191,10 @@ impl PtySession {
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);
 
+        // Get scrollback information
+        let scrollback_pos = screen.scrollback();
+        let scrollback_total = 10000; // Match the scrollback buffer size
+
         // Generate appropriate update message
         if previous_grid.is_empty() {
             // First update - send keyframe
@@ -1000,9 +1202,11 @@ impl PtySession {
             tracing::debug!("Sending keyframe with {} cells", current_grid.len());
             Some(GridUpdateMessage::Keyframe {
                 size: size.into(),
-                cells: current_grid,
+                cells: current_grid.clone().into_iter().collect(),
                 cursor: new_cursor,
                 cursor_visible: is_cursor_visible,
+                scrollback_position: scrollback_pos,
+                scrollback_total,
                 timestamp,
             })
         } else if !changes.is_empty() || cursor_changed {
@@ -1021,6 +1225,8 @@ impl PtySession {
                     None
                 },
                 cursor_visible: Some(is_cursor_visible), // Always send cursor visibility in diffs for now
+                scrollback_position: Some(scrollback_pos), // Always send scrollback position for now
+                scrollback_total: Some(scrollback_total),  // Always send scrollback total for now
                 timestamp,
             })
         } else {
@@ -1073,6 +1279,10 @@ impl PtySession {
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);
 
+        // Get scrollback information
+        let scrollback_pos = screen.scrollback();
+        let scrollback_total = 10000; // Match the scrollback buffer size
+
         // Debug keyframe generation
         let non_empty_count = current_grid
             .values()
@@ -1104,9 +1314,11 @@ impl PtySession {
 
         GridUpdateMessage::Keyframe {
             size: size.into(),
-            cells: current_grid,
+            cells: current_grid.into_iter().collect(),
             cursor,
             cursor_visible: is_cursor_visible,
+            scrollback_position: scrollback_pos,
+            scrollback_total,
             timestamp: std::time::SystemTime::now(),
         }
     }
@@ -1153,7 +1365,15 @@ impl PtySession {
                 }
             }
             KeyCode::Enter => vec![b'\r'],
-            KeyCode::Backspace => vec![0x7f], // DEL
+            KeyCode::Backspace => {
+                if modifiers.alt {
+                    vec![0x1b, 0x7f] // Alt+Backspace (ESC + DEL)
+                } else if modifiers.ctrl {
+                    vec![0x15] // Cmd+Backspace (Ctrl+U - delete line on macOS)
+                } else {
+                    vec![0x7f] // Normal Backspace (DEL)
+                }
+            }
             KeyCode::Tab => {
                 if modifiers.shift {
                     vec![0x1b, b'[', b'Z'] // Shift+Tab

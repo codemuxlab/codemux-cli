@@ -24,15 +24,6 @@ const getBaseUrl = (): string => {
 
 const BASE_URL = getBaseUrl();
 
-// Debug logging for development
-if (typeof window !== "undefined" && window.location.port === "8081") {
-	console.log(
-		`🔧 API Client configured for development - Backend: ${BASE_URL}`,
-	);
-} else {
-	console.log(`🚀 API Client configured for production - Backend: ${BASE_URL}`);
-}
-
 // Custom error class for API errors
 export class ApiClientError extends Error {
 	constructor(
@@ -60,9 +51,6 @@ class ApiClient {
 	): Promise<T> {
 		const url = `${this.baseUrl}${endpoint}`;
 
-		// Debug logging to verify URL
-		console.log(`🌐 API Request: ${options.method || "GET"} ${url}`);
-
 		const config: RequestInit = {
 			headers: {
 				"Content-Type": "application/json",
@@ -86,12 +74,79 @@ class ApiClient {
 
 			// Handle empty responses
 			const contentType = response.headers.get("content-type");
-			if (!contentType?.includes("application/json")) {
+			if (
+				!contentType?.includes("application/json") &&
+				!contentType?.includes("application/vnd.api+json")
+			) {
 				return {} as T;
 			}
 
-			const data = await response.json();
-			return data;
+			let data: unknown;
+			try {
+				data = await response.json();
+			} catch (_parseError) {
+				throw new ApiClientError(
+					"Failed to parse JSON response",
+					response.status,
+					response.statusText,
+					url,
+				);
+			}
+
+			// Check if response is JSON API format
+			if (data && typeof data === "object" && "data" in data) {
+				const jsonApiData = data as {
+					data: unknown;
+					errors?: Array<{ status?: string; title?: string; detail?: string }>;
+				};
+
+				// Handle JSON API errors
+				if (jsonApiData.errors && jsonApiData.errors.length > 0) {
+					const error = jsonApiData.errors[0];
+					throw new ApiClientError(
+						error.detail || error.title || "API error",
+						Number(error.status) || response.status,
+						error.title || response.statusText,
+						url,
+					);
+				}
+
+				const extractedData = jsonApiData.data;
+
+				// If data is an array of JSON API resources, extract the attributes
+				if (Array.isArray(extractedData)) {
+					const result = extractedData.map((resource: unknown) => {
+						// If it's a JSON API resource with attributes, extract them
+						if (
+							resource &&
+							typeof resource === "object" &&
+							"attributes" in resource &&
+							"type" in resource
+						) {
+							return resource.attributes;
+						}
+						// Otherwise return the resource as-is
+						return resource;
+					});
+					return result as T;
+				}
+
+				// If data is a single JSON API resource, extract the attributes
+				if (
+					extractedData &&
+					typeof extractedData === "object" &&
+					"attributes" in extractedData &&
+					"type" in extractedData
+				) {
+					return extractedData.attributes as T;
+				}
+
+				// Return the data field directly if it's not a resource structure
+				return extractedData as T;
+			}
+
+			// Return raw data if not JSON API format (backwards compatibility)
+			return data as T;
 		} catch (error) {
 			if (error instanceof ApiClientError) {
 				throw error;

@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use crate::session_data::SessionEvent;
+use crate::capture::session_data::SessionEvent;
 
 pub async fn analyze_jsonl_data(input_path: &Path, verbose: bool) -> Result<()> {
     println!("📊 Loading JSONL data from: {}", input_path.display());
@@ -201,9 +201,9 @@ pub async fn analyze_jsonl_data(input_path: &Path, verbose: bool) -> Result<()> 
     Ok(())
 }
 
-async fn analyze_timing_patterns(
-    cursor_differences: &[(u32, (u16, u16), (u16, u16), Vec<u8>)],
-) -> Result<()> {
+type CursorDifference = (u32, (u16, u16), (u16, u16), Vec<u8>);
+
+async fn analyze_timing_patterns(cursor_differences: &[CursorDifference]) -> Result<()> {
     println!("\n🕒 Timing Analysis & Smart Chunking Suggestions:");
 
     if cursor_differences.is_empty() {
@@ -316,7 +316,7 @@ async fn analyze_timing_patterns(
 
 async fn analyze_cursor_return_sequences(
     all_events: &[(usize, u32, Vec<u8>)],
-    _cursor_differences: &[(u32, (u16, u16), (u16, u16), Vec<u8>)],
+    _cursor_differences: &[CursorDifference],
 ) -> Result<()> {
     println!("\n🔍 Cursor Return Sequence Analysis:");
     println!("Analyzing what happens AFTER status messages to move cursor back to input area...");

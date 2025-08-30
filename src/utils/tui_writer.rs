@@ -11,18 +11,22 @@ pub enum LogLevel {
     Trace,
 }
 
-impl LogLevel {
-    pub fn from_str(s: &str) -> Self {
+impl std::str::FromStr for LogLevel {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
-            "ERROR" => LogLevel::Error,
-            "WARN" => LogLevel::Warn,
-            "INFO" => LogLevel::Info,
-            "DEBUG" => LogLevel::Debug,
-            "TRACE" => LogLevel::Trace,
-            _ => LogLevel::Info, // Default fallback
+            "ERROR" => Ok(LogLevel::Error),
+            "WARN" => Ok(LogLevel::Warn),
+            "INFO" => Ok(LogLevel::Info),
+            "DEBUG" => Ok(LogLevel::Debug),
+            "TRACE" => Ok(LogLevel::Trace),
+            _ => Ok(LogLevel::Info), // Default fallback
         }
     }
+}
 
+impl LogLevel {
     pub fn as_str(&self) -> &'static str {
         match self {
             LogLevel::Error => "ERROR",
@@ -121,7 +125,7 @@ fn parse_tracing_line(line: &str) -> Option<LogEntry> {
     };
 
     // Extract level using enum
-    let level = LogLevel::from_str(level_str);
+    let level = level_str.parse::<LogLevel>().unwrap_or(LogLevel::Info);
 
     // Clean up message (remove module path if present)
     let message = if let Some(colon_pos) = message_part.find(": ") {
