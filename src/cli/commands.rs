@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(name = "codemux")]
 #[command(about = "Terminal multiplexer for AI code agents", long_about = None)]
+#[command(version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
