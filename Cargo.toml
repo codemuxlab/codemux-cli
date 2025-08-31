@@ -20,7 +20,7 @@ tokio = { version = "1.40", features = ["full"] }
 axum = { version = "0.7", features = ["ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["add-extension", "cors"] }
-tokio-tungstenite = "0.24"
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
 portable-pty = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -43,7 +43,7 @@ tui-term = "0.1.11"
 vt100 = { git = "https://github.com/codemuxlab/codemux-vt100.git" }
 rust-embed = { version = "8.5", features = ["debug-embed"] }
 mime_guess = "2.0"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 url = "2.5"
 ts-rs = { version = "11.0", features = ["serde-compat"] }
 notify = "6.1"
