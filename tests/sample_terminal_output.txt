@@ -1,0 +1,31 @@
+Clear screen and show welcome message
+[2J[H[1;32mWelcome to CodeMux Terminal[0m
+
+[1;34mStarting application...[0m
+[32m✓[0m Database connection established
+[32m✓[0m Configuration loaded
+[32m✓[0m Services initialized
+
+[1;33mWarning:[0m Some optional features disabled
+[1;31mError:[0m Failed to load plugin xyz
+
+[36mProcessing files:[0m
+  - config.toml [32m✓[0m
+  - package.json [32m✓[0m
+  - Cargo.toml [32m✓[0m
+  - README.md [31m✗[0m (not found)
+
+[1mProgress:[0m [32m████████████████████[0m 100%
+
+[10;1HCursor positioned at row 10, column 1
+[?25lHidden cursor text[?25h
+[2KLine cleared
+
+Multiple lines of output:
+Line 1 with normal text
+[1mLine 2 with bold text[0m
+[4mLine 3 with underline[0m
+[7mLine 4 with reverse video[0m
+[1;31;44mLine 5 with bold red on blue background[0m
+
+Final status: [1;32mSUCCESS[0m

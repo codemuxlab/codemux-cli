@@ -49,6 +49,17 @@ ts-rs = { version = "11.0", features = ["serde-compat"] }
 notify = "6.1"
 
 [dev-dependencies]
+vt100 = "0.15"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[[bench]]
+name = "terminal_parsing_benchmark"
+harness = false
+
+[[bench]]
+name = "real_session_benchmark"
+harness = false
 
 # The profile that 'dist' will build with
 [profile.dist]
