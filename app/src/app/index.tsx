@@ -1,11 +1,13 @@
 import { useRouter } from "expo-router";
 import React from "react";
 import { ScrollView, Text, TouchableOpacity, View } from "react-native";
+import { LastMessage } from "../components/LastMessage";
 import { useProjects } from "../hooks/api";
 
 export default function Page() {
 	const router = useRouter();
 	const { data: projects = [], isLoading: loading, error } = useProjects();
+	console.log(projects);
 
 	if (loading) {
 		return (
@@ -51,7 +53,9 @@ export default function Page() {
 					</View>
 				) : (
 					projects.map((project) => {
-						const projectSessions = project.sessions || [];
+						console.log(project);
+						const projectSessions =
+							project.relationships?.recent_sessions || [];
 
 						return (
 							<View
@@ -62,10 +66,10 @@ export default function Page() {
 								<View className="flex-row justify-between items-start mb-3">
 									<View className="flex-1">
 										<Text className="text-white text-xl font-bold">
-											{project.name}
+											{project.attributes?.name || "Unknown Project"}
 										</Text>
 										<Text className="text-gray-400 text-sm mt-1">
-											{project.path}
+											{project.attributes?.path || "Unknown Path"}
 										</Text>
 									</View>
 									<View className="px-2 py-1 rounded bg-blue-900">
@@ -89,31 +93,54 @@ export default function Page() {
 														<Text className="text-white text-sm font-semibold">
 															Session: {session.id}
 														</Text>
-														<Text className="text-gray-400 text-xs">
-															Agent: {session.agent}
-														</Text>
+														<View className="flex-row items-center gap-2 mt-1">
+															<Text className="text-gray-400 text-xs">
+																Agent: {session.attributes?.agent || "Unknown"}
+															</Text>
+															{session.attributes?.session_type ===
+																"Historical" && (
+																<View className="px-1.5 py-0.5 rounded bg-amber-900">
+																	<Text className="text-amber-400 text-xs">
+																		HISTORICAL
+																	</Text>
+																</View>
+															)}
+														</View>
 													</View>
 													<View
 														className={`px-2 py-1 rounded ${
-															session.status === "running"
+															session.attributes?.status === "running"
 																? "bg-green-900"
-																: "bg-gray-600"
+																: session.attributes?.session_type === "Active"
+																	? "bg-blue-900"
+																	: "bg-gray-600"
 														}`}
 													>
 														<Text
 															className={`text-xs ${
-																session.status === "running"
+																session.attributes?.status === "running"
 																	? "text-green-400"
-																	: "text-gray-400"
+																	: session.attributes?.session_type ===
+																			"Active"
+																		? "text-blue-400"
+																		: "text-gray-400"
 															}`}
 														>
-															{session.status.toUpperCase()}
+															{session.attributes?.status?.toUpperCase() ||
+																"UNKNOWN"}
 														</Text>
 													</View>
 												</View>
 
+												{/* Last Message */}
+												<LastMessage
+													message={session.attributes?.last_message}
+													agent={session.attributes?.agent}
+												/>
+
 												<View className="flex-row gap-4">
 													<TouchableOpacity
+														key={`${session.id}-terminal`}
 														onPress={() =>
 															router.push(`/session/${session.id}/terminal`)
 														}
@@ -123,6 +150,7 @@ export default function Page() {
 														</Text>
 													</TouchableOpacity>
 													<TouchableOpacity
+														key={`${session.id}-diff`}
 														onPress={() =>
 															router.push(`/session/${session.id}/diff`)
 														}
@@ -132,6 +160,7 @@ export default function Page() {
 														</Text>
 													</TouchableOpacity>
 													<TouchableOpacity
+														key={`${session.id}-logs`}
 														onPress={() =>
 															router.push(`/session/${session.id}/logs`)
 														}

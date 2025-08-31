@@ -28,8 +28,10 @@ pub enum PromptType {
     },
 }
 
+type PromptPattern = (Regex, fn(&str) -> Option<PromptType>);
+
 pub struct _PromptDetector {
-    patterns: Vec<(Regex, fn(&str) -> Option<PromptType>)>,
+    patterns: Vec<PromptPattern>,
 }
 
 impl _PromptDetector {

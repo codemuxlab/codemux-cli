@@ -7,11 +7,13 @@ import {
 	TouchableOpacity,
 	View,
 } from "react-native";
+import { useWebSocketWithReconnect } from "../hooks/useWebSocketWithReconnect";
 import {
 	availableThemes,
 	useTerminalStore,
 	type WebKeyEvent,
 } from "../stores/terminalStore";
+import type { ClientMessage, ServerMessage } from "../types/bindings";
 import { TerminalCell } from "./TerminalCell";
 
 interface TerminalProps {
@@ -181,32 +183,61 @@ const ThemeSelector = memo(() => {
 ThemeSelector.displayName = "ThemeSelector";
 
 export default function Terminal({ sessionId }: TerminalProps) {
-	const [isConnected, setIsConnected] = useState(false);
-	const wsRef = useRef<WebSocket | null>(null);
 	const scrollViewRef = useRef<ScrollView>(null);
 	const terminalRef = useRef<View>(null);
 
-	const handleWebSocketMessage = useCallback(
-		(message: { type: string; [key: string]: unknown }) => {
+	const handleWebSocketMessage = useCallback((event: MessageEvent) => {
+		try {
+			const message = JSON.parse(event.data) as ServerMessage;
 			console.log("WebSocket message received:", message.type, message);
 
 			switch (message.type) {
 				case "grid_update":
-					console.log("Grid update:", {
-						type: message.update_type,
-						cellCount: message.cells?.length,
-						size: message.size,
-						cursor: message.cursor,
-						cursor_visible: message.cursor_visible,
-					});
+					if ("Keyframe" in message) {
+						console.log("Grid update keyframe:", {
+							size: message.Keyframe.size,
+							cellCount: message.Keyframe.cells.length,
+							cursor: message.Keyframe.cursor,
+							cursor_visible: message.Keyframe.cursor_visible,
+						});
 
-					// Log first few cells for debugging
-					if (message.cells?.length > 0) {
-						console.log("Sample cells:", message.cells.slice(0, 5));
+						// Transform keyframe data to match store expectations
+						const transformedMessage = {
+							type: "grid_update",
+							size: message.Keyframe.size,
+							cells: message.Keyframe.cells,
+							cursor: {
+								row: message.Keyframe.cursor[0],
+								col: message.Keyframe.cursor[1],
+							},
+							cursor_visible: message.Keyframe.cursor_visible,
+							timestamp: message.Keyframe.timestamp,
+						};
+
+						useTerminalStore.getState().handleGridUpdate(transformedMessage);
+					} else if ("Diff" in message) {
+						console.log("Grid update diff:", {
+							changeCount: message.Diff.changes.length,
+							cursor: message.Diff.cursor,
+							cursor_visible: message.Diff.cursor_visible,
+						});
+
+						// Transform diff data to match store expectations
+						const transformedMessage = {
+							type: "grid_update",
+							cells: message.Diff.changes,
+							cursor: message.Diff.cursor
+								? {
+										row: message.Diff.cursor[0],
+										col: message.Diff.cursor[1],
+									}
+								: undefined,
+							cursor_visible: message.Diff.cursor_visible,
+							timestamp: message.Diff.timestamp,
+						};
+
+						useTerminalStore.getState().handleGridUpdate(transformedMessage);
 					}
-
-					// Call the store action directly without subscribing
-					useTerminalStore.getState().handleGridUpdate(message);
 					break;
 				case "pty_size":
 					console.log("PTY size update:", message.rows, "x", message.cols);
@@ -214,79 +245,115 @@ export default function Terminal({ sessionId }: TerminalProps) {
 					break;
 				case "output":
 					// Handle legacy output messages - these are raw terminal output
-					// We can log them for debugging but grid_update is the primary channel
-					console.log("Received raw output:", message.content);
+					console.log(
+						"Received raw output:",
+						message.data,
+						"at",
+						message.timestamp,
+					);
+					break;
+				case "error":
+					console.error("Server error:", message.message);
 					break;
 				default:
-					console.log("Unknown message type:", message.type, message);
+					console.log("Unknown message type:", message);
 			}
+		} catch (error) {
+			console.error("Failed to parse WebSocket message:", error);
+		}
+	}, []);
+
+	// WebSocket connection with auto-reconnection
+	const {
+		isConnected,
+		isReconnecting,
+		reconnectAttempt,
+		nextReconnectIn,
+		send,
+		reconnect,
+	} = useWebSocketWithReconnect({
+		url: `ws://localhost:8765/ws/${sessionId}`,
+		maxReconnectAttempts: 10,
+		baseDelay: 5000,
+		maxDelay: 30000,
+		backoffFactor: 2,
+		onOpen: () => {
+			console.log("WebSocket connected");
+			// Request initial keyframe to get current terminal state
+			// TODO: This message type is not in the generated ClientMessage union
+			// Consider adding it to the Rust backend or removing this functionality
+			send(JSON.stringify({ type: "request_keyframe" }));
 		},
-		[],
+		onMessage: handleWebSocketMessage,
+		onClose: (event) => {
+			console.log("WebSocket disconnected:", event.code, event.reason);
+		},
+		onError: (error) => {
+			console.error("WebSocket error:", error);
+		},
+		onReconnectAttempt: (attempt, delay) => {
+			console.log(
+				`Attempting to reconnect (${attempt}/10) in ${Math.round(delay / 1000)}s`,
+			);
+		},
+	});
+
+	const sendScrollEvent = useCallback(
+		(direction: "Up" | "Down", lines: number = 1) => {
+			const message: ClientMessage = {
+				type: "scroll",
+				direction,
+				lines,
+			};
+			send(JSON.stringify(message));
+		},
+		[send],
 	);
 
+	// Add wheel event listener for web platforms
 	useEffect(() => {
-		// Connect to WebSocket
-		const wsUrl = `ws://localhost:8765/ws/${sessionId}`;
-		const ws = new WebSocket(wsUrl);
-		wsRef.current = ws;
+		const handleWheel = (event: WheelEvent) => {
+			// Prevent default scroll behavior
+			event.preventDefault();
 
-		ws.onopen = () => {
-			setIsConnected(true);
-			console.log("WebSocket connected");
+			// Determine scroll direction from wheel delta
+			const direction = event.deltaY > 0 ? "Down" : "Up";
 
-			// Request initial keyframe to get current terminal state
-			ws.send(
-				JSON.stringify({
-					type: "request_keyframe",
-				}),
-			);
+			sendScrollEvent(direction, 1);
 		};
 
-		ws.onmessage = (event) => {
-			try {
-				const message = JSON.parse(event.data);
-				handleWebSocketMessage(message);
-			} catch (error) {
-				console.error("Failed to parse WebSocket message:", error);
-			}
-		};
+		// Add to document for web platforms
+		if (typeof window !== "undefined") {
+			document.addEventListener("wheel", handleWheel, { passive: false });
+			return () => {
+				document.removeEventListener("wheel", handleWheel);
+			};
+		}
+	}, [sendScrollEvent]);
 
-		ws.onclose = () => {
-			setIsConnected(false);
-			console.log("WebSocket disconnected");
-		};
-
-		ws.onerror = (error) => {
-			console.error("WebSocket error:", error);
-		};
-
-		return () => {
-			if (ws.readyState === WebSocket.OPEN) {
-				ws.close();
-			}
-		};
-	}, [sessionId, handleWebSocketMessage]);
-
-	const _sendInput = useCallback((data: string) => {
-		if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-			wsRef.current.send(
+	const _sendInput = useCallback(
+		(data: string) => {
+			send(
 				JSON.stringify({
 					type: "input",
 					data: data,
 				}),
 			);
-		}
-	}, []);
+		},
+		[send],
+	);
 
-	const sendKeyEvent = useCallback((keyEvent: WebKeyEvent) => {
-		if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-			const message = {
+	const sendKeyEvent = useCallback(
+		(keyEvent: WebKeyEvent) => {
+			const message: ClientMessage = {
 				type: "key",
-				...keyEvent,
+				code: keyEvent.code,
+				modifiers: keyEvent.modifiers,
 			};
-			wsRef.current.send(JSON.stringify(message));
-		}
-	}, []);
+			send(JSON.stringify(message));
+		},
+		[send],
+	);
 
 	const handleInputSubmit = useCallback(
 		(text: string) => {
@@ -321,7 +388,7 @@ export default function Terminal({ sessionId }: TerminalProps) {
 				meta: event.metaKey || false,
 			};
 
-			let keyCode: string | { Char: string } | { F: number };
+			let keyCode: import("../types/bindings").KeyCode;
 
 			// Map common keys
 			switch (event.key) {
@@ -407,13 +474,31 @@ export default function Terminal({ sessionId }: TerminalProps) {
 		<View className="flex-1 bg-black" ref={terminalRef}>
 			{/* Connection status and theme controls */}
 			<View
-				className={`p-2 flex-row justify-between items-center ${isConnected ? "bg-green-700" : "bg-red-700"}`}
+				className={`p-2 flex-row justify-between items-center ${
+					isConnected
+						? "bg-green-700"
+						: isReconnecting
+							? "bg-yellow-700"
+							: "bg-red-700"
+				}`}
 			>
-				<Text className="text-white text-xs">
-					{isConnected
-						? `Connected to session ${sessionId.slice(0, 8)}`
-						: "Disconnected"}
-				</Text>
+				<View className="flex-1">
+					<Text className="text-white text-xs">
+						{isConnected
+							? `Connected to session ${sessionId.slice(0, 8)}`
+							: isReconnecting
+								? `Reconnecting (${reconnectAttempt}/10)${nextReconnectIn > 0 ? ` in ${nextReconnectIn}s` : "..."}`
+								: "Disconnected"}
+					</Text>
+					{isReconnecting && (
+						<TouchableOpacity
+							onPress={reconnect}
+							className="bg-white bg-opacity-20 px-2 py-1 rounded mt-1 self-start"
+						>
+							<Text className="text-white text-xs">Reconnect Now</Text>
+						</TouchableOpacity>
+					)}
+				</View>
 				<View className="flex-row items-center">
 					<DarkLightToggle />
 					<ThemeSelector />
@@ -434,7 +519,9 @@ export default function Terminal({ sessionId }: TerminalProps) {
 						minHeight: "100%",
 					}}
 				>
-					<TerminalGrid />
+					<View ref={terminalRef}>
+						<TerminalGrid />
+					</View>
 				</ScrollView>
 			</TerminalBackground>
 

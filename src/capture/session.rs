@@ -10,7 +10,7 @@ use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
-use crate::session_data::{GridCell, GridCellWithPos, JsonlRecorder, SessionEvent};
+use crate::capture::session_data::{GridCell, GridCellWithPos, JsonlRecorder, SessionEvent};
 
 pub struct CaptureSession {
     agent: String,
@@ -172,7 +172,7 @@ impl CaptureSession {
 
         // Create async data processor task
         tokio::spawn(async move {
-            let mut vt_parser = vt100::Parser::new(30, 120, 0);
+            let mut vt_parser = tui_term::vt100::Parser::new(30, 120, 0);
             let mut grid_state: HashMap<(u16, u16), GridCell> = HashMap::new();
 
             while let Some(data) = raw_data_rx.recv().await {

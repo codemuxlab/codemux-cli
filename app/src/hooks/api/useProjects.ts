@@ -5,13 +5,13 @@ import {
 	queryClient,
 	queryKeys,
 } from "../../lib/queryClient";
-import type { CreateProjectRequest, ProjectInfo } from "../../types/api";
+import type { CreateProjectRequest, Project } from "../../types/api";
 
 // Hook to fetch all projects
 export const useProjects = (enabled = true) => {
 	return useQuery({
 		queryKey: queryKeys.projects(),
-		queryFn: api.projects.list,
+		queryFn: () => api.projects.list(),
 		enabled,
 		staleTime: 60 * 1000, // Projects don't change as frequently as sessions
 		meta: {
@@ -86,7 +86,7 @@ export const useRefetchProjects = () => {
 
 // Hook to get project count without subscribing to changes
 export const useProjectsCount = () => {
-	const projectsData = queryClient.getQueryData<ProjectInfo[]>(
+	const projectsData = queryClient.getQueryData<Project[]>(
 		queryKeys.projects(),
 	);
 	return projectsData?.length ?? 0;
@@ -98,7 +98,9 @@ export const useProjectByPath = (path: string) => {
 		queryKey: [...queryKeys.projects(), "by-path", path],
 		queryFn: async () => {
 			const projects = await api.projects.list();
-			return projects.find((project) => project.path === path) || null;
+			return (
+				projects.find((project) => project.attributes?.path === path) || null
+			);
 		},
 		enabled: !!path,
 		staleTime: 60 * 1000,

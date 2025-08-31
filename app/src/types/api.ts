@@ -1,3 +1,9 @@
+import type {
+	GridCell,
+	ProjectResourceTS,
+	SessionResourceTS,
+} from "./bindings";
+
 // Base types for API responses
 export interface ApiResponse<T = unknown> {
 	success: boolean;
@@ -11,32 +17,17 @@ export interface ApiError {
 	status?: number;
 }
 
-// Session related types
-export interface Session {
-	id: string;
-	agent: string;
-	status: "running" | "active" | "inactive" | "completed" | "error";
-	created?: string;
-	updated?: string;
-	project?: string; // Changed from project_id to project to match backend
-	project_path?: string;
-}
+// Session related types - use new JSON API resource types
+export type Session = SessionResourceTS;
+export type Project = ProjectResourceTS;
+
+// Re-export response wrapper types
+export type { ProjectListResponse, SessionResponse } from "./bindings";
 
 export interface CreateSessionRequest {
 	agent?: string;
 	project_id?: string;
 	project_path?: string;
-}
-
-// Project related types
-export interface ProjectInfo {
-	id: string;
-	name: string;
-	path: string;
-	created?: string;
-	updated?: string;
-	active_sessions?: number;
-	sessions: Session[]; // Now includes sessions array
 }
 
 export interface CreateProjectRequest {
@@ -108,6 +99,13 @@ export interface WebSocketMessage {
 	timestamp?: string;
 }
 
+// Use generated types for WebSocket communication
+export type {
+	ClientMessage,
+	GridUpdateMessage,
+	ServerMessage,
+} from "./bindings";
+
 export interface TerminalMessage extends WebSocketMessage {
 	type: "terminal";
 	data: {
@@ -124,7 +122,7 @@ export interface GitStatusMessage extends WebSocketMessage {
 	};
 }
 
-export interface GridUpdateMessage extends WebSocketMessage {
+export interface LegacyGridUpdateMessage extends WebSocketMessage {
 	type: "grid";
 	data: {
 		sessionId: string;
@@ -133,17 +131,10 @@ export interface GridUpdateMessage extends WebSocketMessage {
 	};
 }
 
-// Terminal grid types
-export interface GridCell {
-	char: string;
-	fg_color?: string;
-	bg_color?: string;
-	bold?: boolean;
-	italic?: boolean;
-	underline?: boolean;
-	reverse?: boolean;
-}
+// Use the generated GridCell type from bindings
+export type { GridCell } from "./bindings";
 
+// Keep CursorPosition for backwards compatibility, but align with generated types
 export interface CursorPosition {
 	row: number;
 	col: number;
@@ -220,8 +211,9 @@ export const isSession = (obj: unknown): obj is Session => {
 		typeof obj === "object" &&
 		"id" in obj &&
 		typeof (obj as Session).id === "string" &&
-		"agent" in obj &&
-		typeof (obj as Session).agent === "string"
+		"attributes" in obj &&
+		(obj as Session).attributes !== null &&
+		typeof (obj as Session).attributes === "object"
 	);
 };
 
@@ -245,15 +237,14 @@ export const isGitDiff = (obj: unknown): obj is GitDiff => {
 	);
 };
 
-export const isProjectInfo = (obj: unknown): obj is ProjectInfo => {
+export const isProject = (obj: unknown): obj is Project => {
 	return (
 		obj !== null &&
 		typeof obj === "object" &&
 		"id" in obj &&
-		typeof (obj as ProjectInfo).id === "string" &&
-		"name" in obj &&
-		typeof (obj as ProjectInfo).name === "string" &&
-		"path" in obj &&
-		typeof (obj as ProjectInfo).path === "string"
+		typeof (obj as Project).id === "string" &&
+		"attributes" in obj &&
+		(obj as Project).attributes !== null &&
+		typeof (obj as Project).attributes === "object"
 	);
 };

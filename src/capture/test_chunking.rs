@@ -9,7 +9,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     let _start_time = std::time::Instant::now();
 
     // Strategy 1: BYTE-BY-BYTE processing (ultra fine-grained)
-    let mut byte_parser = vt100::Parser::new(30, 120, 0);
+    let mut byte_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut byte_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 1: BYTE-BY-BYTE Processing (Ultra fine-grained)");
@@ -40,7 +40,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     }
 
     // Strategy 2: LINE-BY-LINE processing (split on newlines)
-    let mut line_parser = vt100::Parser::new(30, 120, 0);
+    let mut line_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut line_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 2: LINE-BY-LINE Processing (Split on newlines)");
@@ -69,7 +69,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     }
 
     // Strategy 3: ESCAPE-SEQUENCE-AWARE processing (split at escape sequences)
-    let mut escape_parser = vt100::Parser::new(30, 120, 0);
+    let mut escape_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut escape_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 3: ESCAPE-SEQUENCE-AWARE Processing");
@@ -98,7 +98,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     }
 
     // Strategy 4: REVERSE ORDER processing (process from end to start)
-    let mut reverse_parser = vt100::Parser::new(30, 120, 0);
+    let mut reverse_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut reverse_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 4: REVERSE ORDER Processing");
@@ -126,7 +126,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     }
 
     // Strategy 5: RANDOM ORDER processing (shuffle chunks)
-    let mut random_parser = vt100::Parser::new(30, 120, 0);
+    let mut random_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut random_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 5: RANDOM ORDER Processing");
@@ -167,7 +167,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     }
 
     // Strategy 6: SKIP STATUS UPDATES processing (filter out status-related chunks)
-    let mut filtered_parser = vt100::Parser::new(30, 120, 0);
+    let mut filtered_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut filtered_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 6: SKIP STATUS UPDATES Processing");
@@ -215,7 +215,7 @@ pub fn test_vt100_chunking_strategies(raw_data_sequence: &[Vec<u8>]) -> Result<(
     }
 
     // Strategy 7: IMMEDIATE processing (like capture system) - for comparison
-    let mut immediate_parser = vt100::Parser::new(30, 120, 0);
+    let mut immediate_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut immediate_cursor_history = Vec::new();
 
     println!("\n📊 Strategy 7: IMMEDIATE Processing (Original Capture-style)");
@@ -412,74 +412,9 @@ fn split_by_escape_sequences(raw_data_sequence: &[Vec<u8>]) -> Vec<Vec<u8>> {
     result
 }
 
-/// Split data by VT100 sequence boundaries
-fn split_by_vt100_boundaries(raw_data_sequence: &[Vec<u8>]) -> Vec<Vec<u8>> {
-    let mut result = Vec::new();
-    let mut current_chunk = Vec::new();
-
-    for data in raw_data_sequence {
-        let data_str = String::from_utf8_lossy(data);
-
-        // Check if this chunk contains complete VT100 sequences
-        if data_str.contains("\x1b[2K\x1b[1A") || // Clear line + cursor up sequence
-           data_str.contains("\x1b[G") || // Cursor to column 0
-           data_str.contains("Claude") && data_str.contains("limit")
-        // Status message
-        {
-            // Complete any pending chunk
-            if !current_chunk.is_empty() {
-                result.push(current_chunk.clone());
-                current_chunk.clear();
-            }
-            // Add this chunk as a complete sequence
-            result.push(data.clone());
-        } else {
-            // Accumulate partial sequences
-            current_chunk.extend_from_slice(data);
-        }
-    }
-
-    // Add any remaining data
-    if !current_chunk.is_empty() {
-        result.push(current_chunk);
-    }
-
-    result
-}
-
-/// Analyze where cursor differences occur
-fn analyze_cursor_differences(immediate: &[(usize, (u16, u16))], batched: &[(usize, (u16, u16))]) {
-    println!("\n🔍 Cursor Movement Analysis:");
-
-    // Find first divergence point
-    for (i, (_, immediate_cursor)) in immediate.iter().enumerate() {
-        if let Some((_, batched_cursor)) = batched.get(i / 3) {
-            // Batched has fewer entries
-            if immediate_cursor != batched_cursor {
-                println!(
-                    "   First difference at immediate step {}: ({},{}) vs ({},{})",
-                    i, immediate_cursor.0, immediate_cursor.1, batched_cursor.0, batched_cursor.1
-                );
-                break;
-            }
-        }
-    }
-
-    // Show cursor movement patterns
-    println!("\n📋 Immediate cursor movement:");
-    for (i, cursor) in immediate.iter().take(10) {
-        println!("   Step {}: ({}, {})", i, cursor.0, cursor.1);
-    }
-
-    println!("\n📋 Batched cursor movement:");
-    for (i, cursor) in batched.iter().take(10) {
-        println!("   Batch {}: ({}, {})", i, cursor.0, cursor.1);
-    }
-}
-
 /// Load raw data sequence from a JSONL file for testing
 pub fn load_test_data_from_jsonl(jsonl_path: &str) -> Result<Vec<Vec<u8>>> {
-    use crate::session_data::SessionEvent;
+    use crate::capture::session_data::SessionEvent;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 

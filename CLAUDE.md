@@ -12,7 +12,7 @@ Codemux is a specialized terminal multiplexer for AI coding CLIs (claude, gemini
 
 Operating modes:
 - **Quick mode**: Launch a single AI session immediately
-- **Daemon mode**: Background service managing multiple project sessions
+- **Server mode**: Background service managing multiple project sessions
 
 ## Development Commands
 
@@ -30,7 +30,7 @@ just capture             # Build capture binary only (fast)
 just dev                 # Development workflow - debug mode (fast startup)
 just run                 # Production workflow - release mode (includes React app automatically)
 just run-debug           # Run with debug logging
-just daemon              # Start daemon mode
+just server              # Start server mode
 
 # Capture system
 just capture-record claude session.jsonl  # Record session to JSONL
@@ -66,7 +66,7 @@ SKIP_WEB_BUILD=1 cargo build --bin codemux-capture  # Capture binary only
 cargo run --bin codemux                  # Development run mode (debug, no React app by default)
 cargo run --release --bin codemux       # Production run mode (includes React app automatically)
 cargo run --bin codemux -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
-cargo run --bin codemux -- daemon       # Daemon mode
+cargo run --bin codemux -- server start # Server mode
 
 # Capture system
 SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
@@ -109,20 +109,20 @@ npx expo export         # Export for production
 1. **CLI Interface** (using clap):
    - `codemux run <tool> [args]` - Quick launch mode
    - `codemux run <tool> --continue` - Continue from most recent JSONL conversation file
-   - `codemux daemon` - Start daemon mode
+   - `codemux server start` - Start server mode
    - `codemux add-project <path>` - Register a project
    - `codemux list` - List projects/sessions
-   - `codemux stop` - Stop daemon
+   - `codemux stop` - Stop server
 
 2. **Whitelist System**: 
    - Configurable list of allowed AI CLI tools (claude, gemini, aider, etc.)
    - Tool-specific prompt detection patterns
 
 3. **PTY Session Management**:
-   - **Channel-based Architecture**: PTY sessions communicate via channels (tokio::sync in run mode, WebSocket in daemon mode)
+   - **Channel-based Architecture**: PTY sessions communicate via channels (tokio::sync in run mode, WebSocket in server mode)
    - **PTY Session Component**: Independent component managing subprocess and PTY I/O, not tied to TUI or web UI
    - **Multiple Client Support**: Both TUI and Web UI are equal clients consuming PTY output and sending input
-   - **Unified Interface**: Same channel abstraction works for both run mode (local) and daemon mode (WebSocket-based)
+   - **Unified Interface**: Same channel abstraction works for both run mode (local) and server mode (WebSocket-based)
 
 4. **Client Architecture**:
    - **TUI Client**: Full terminal interface sending complete input stream (keystrokes, control sequences, resize events)
@@ -161,7 +161,7 @@ When implementing features, consider using:
 - `serde` + `serde_json` for serialization
 - `regex` for prompt pattern detection
 - `notify` for file system watching (project changes)
-- `sqlx` with SQLite for daemon state persistence
+- `sqlx` with SQLite for server state persistence
 
 ## Implementation Notes
 
@@ -169,7 +169,7 @@ When implementing features, consider using:
 - **Channel Abstraction**: PTY sessions expose input/output/control channels. TUI and Web UI are both clients using same channel interface.
 - **PTY Session Independence**: PTY sessions are standalone components, not owned by TUI or web server. They manage subprocess lifecycle independently.
 - **Client Equality**: TUI and Web UI are equal clients. Both can resize PTY, send input, receive output.
-- **Mode Consistency**: Same architecture for run mode (local channels) and daemon mode (WebSocket channels).
+- **Mode Consistency**: Same architecture for run mode (local channels) and server mode (WebSocket channels).
 
 ### Input/Output Handling  
 - **TUI Input**: Sends individual keystrokes including `\r` for Enter key directly to PTY
@@ -183,7 +183,7 @@ When implementing features, consider using:
 - **Prompt Detection**: Parse ANSI escape codes and common prompt patterns from AI CLIs
 - **UI Enhancement**: When detecting prompts, send structured JSON to web client instead of raw terminal output
 - **Security**: Validate all commands against whitelist before execution
-- **State Management**: In daemon mode, persist project list and session state to SQLite
+- **State Management**: In server mode, persist project list and session state to SQLite
 - **PTY Sizing**: Both TUI and Web UI can control PTY size. PTY session arbitrates resize requests (last-writer-wins).
   - **Web UI Scaling**: Implements proper scaling with `translate()` + `scale()` transforms, dimension validation, and centering
   - **Resize Handling**: Clear transforms during resize operations to prevent conflicts, use proper timing with requestAnimationFrame
@@ -215,6 +215,42 @@ When implementing features, consider using:
   - Modern JavaScript patterns (optional chaining, proper radix for parseInt)
 - **Type Safety**: All API endpoints must have corresponding TypeScript interfaces
 - **Error Handling**: Proper error boundaries and user feedback for API failures
+
+### TypeScript Bindings (ts-rs)
+- **Automatic Generation**: TypeScript types are automatically generated from Rust structs using ts-rs
+- **Usage**: Add `#[derive(TS)]` and `#[ts(export)]` to Rust structs that need TypeScript bindings
+- **Generation Command**: Run `just ts-bindings` to generate/update TypeScript types
+- **Location**: Generated types are placed in `bindings/` directory
+- **Testing**: ts-rs automatically creates test functions for each exported type (no manual tests needed)
+- **Example**:
+  ```rust
+  use ts_rs::TS;
+  
+  #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+  #[ts(export)]
+  pub struct SessionInfo {
+      pub id: String,
+      pub agent: String,
+  }
+  ```
+
+### API Standards (JSON API Specification)
+- **Specification**: All API responses follow JSON API v1.0 specification
+- **Response Structure**: 
+  ```json
+  {
+    "data": {
+      "type": "resource-type",
+      "id": "resource-id",
+      "attributes": { ... },
+      "relationships": { ... }
+    }
+  }
+  ```
+- **Error Format**: Errors use JSON API error objects with status, title, and detail fields
+- **Implementation**: Use `json_api` module helper functions for consistent formatting
+- **Resource Types**: Common types include "project", "session", "git-status", "git-diff"
+- **Relationships**: Sessions belong to projects, expressed via relationships field
 
 ### Grid Cell Structure
 The `GridCell` struct represents terminal content with full styling support:
@@ -253,6 +289,64 @@ pub struct GridCell {
 - **Terminal Interface**: Full terminal emulation with scaling and proper cursor handling
 - **Cross-platform**: Works on web browsers via React Native Web
 - **Debug Capture**: Session recording and analysis for troubleshooting
+- **Terminal Scrollback**: Full scrollback buffer support with mouse wheel and scroll events
+
+### Terminal Scrollback Implementation
+CodeMux provides full terminal scrollback functionality that allows users to scroll through terminal history, essential for reviewing command output, logs, and debugging information.
+
+#### Architecture
+- **VT100 Scrollback Buffer**: Uses the `vt100` crate's built-in scrollback with 10,000 line history
+- **Scroll Event Handling**: Both TUI (mouse wheel) and web clients (scroll events) send `PtyInput::Scroll` messages
+- **View Management**: `parser.set_scrollback(position)` changes the visible content without affecting the actual PTY
+- **State Synchronization**: Grid updates include `scrollback_position` and `scrollback_total` for client scroll indicators
+
+#### Implementation Details
+```rust
+// Scroll event processing in PTY session
+PtyInput::Scroll { direction, lines, .. } => {
+    let mut parser_guard = input_vt_parser.lock().await;
+    let current_scrollback = parser_guard.screen().scrollback();
+    
+    match direction {
+        ScrollDirection::Up => {
+            let new_scrollback = current_scrollback + lines as usize;
+            parser_guard.set_scrollback(new_scrollback);
+        }
+        ScrollDirection::Down => {
+            let new_scrollback = current_scrollback.saturating_sub(lines as usize);
+            parser_guard.set_scrollback(new_scrollback);
+        }
+    }
+}
+```
+
+#### Key Features
+- **Mouse Wheel Support**: TUI captures mouse scroll events and forwards to PTY session
+- **Bounds Safety**: VT100 library handles all bounds checking internally - no manual limits needed
+- **TypeScript Integration**: Full type safety with generated bindings for scroll state
+- **Client Indicators**: Web and TUI clients receive scroll position for UI indicators
+- **Seamless Experience**: Scrolling works exactly like traditional terminal multiplexers
+
+#### Grid Update Messages
+Both `Keyframe` and `Diff` messages include scrollback information:
+```typescript
+// Generated TypeScript types
+type GridUpdateMessage = {
+  Keyframe: {
+    scrollback_position: number;  // Lines scrolled back from bottom (0 = current)
+    scrollback_total: number;     // Total scrollback buffer size (10,000)
+    // ... other fields
+  }
+} | {
+  Diff: {
+    scrollback_position: number | null;  // Position if changed
+    scrollback_total: number | null;     // Total if changed  
+    // ... other fields
+  }
+}
+```
+
+This implementation provides proper terminal multiplexer scrollback behavior while maintaining type safety and performance.
 
 ## Release Process
 
