@@ -45,7 +45,7 @@ dependencies = [
  "rustix-openpty",
  "serde",
  "signal-hook",
- "unicode-width",
+ "unicode-width 0.1.14",
  "vte 0.13.1",
  "windows-sys 0.59.0",
 ]
@@ -420,7 +420,7 @@ dependencies = [
  "tui-term",
  "url",
  "uuid",
- "vt100",
+ "vt100 0.16.2",
 ]
 
 [[package]]
@@ -1832,7 +1832,7 @@ dependencies = [
  "strum_macros",
  "unicode-segmentation",
  "unicode-truncate",
- "unicode-width",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -2792,7 +2792,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d07f0233f0d4795d2dc6663cfc3ce56b87bebcee66d6bcc088aa6aff5c072361"
 dependencies = [
  "ratatui",
- "vt100",
+ "vt100 0.15.2",
 ]
 
 [[package]]
@@ -2845,7 +2845,7 @@ checksum = "b3644627a5af5fa321c95b9b235a72fd24cd29c648c2c379431e6628655627bf"
 dependencies = [
  "itertools",
  "unicode-segmentation",
- "unicode-width",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -2853,6 +2853,12 @@ name = "unicode-width"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
+
+[[package]]
+name = "unicode-width"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a1a07cc7db3810833284e8d372ccdc6da29741639ecc70c9ec107df0fa6154c"
 
 [[package]]
 name = "untrusted"
@@ -2928,8 +2934,17 @@ checksum = "84cd863bf0db7e392ba3bd04994be3473491b31e66340672af5d11943c6274de"
 dependencies = [
  "itoa",
  "log",
- "unicode-width",
+ "unicode-width 0.1.14",
  "vte 0.11.1",
+]
+
+[[package]]
+name = "vt100"
+version = "0.16.2"
+dependencies = [
+ "itoa",
+ "unicode-width 0.2.1",
+ "vte 0.15.0",
 ]
 
 [[package]]
@@ -2955,6 +2970,16 @@ dependencies = [
  "serde",
  "utf8parse",
  "vte_generate_state_changes",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
 ]
 
 [[package]]
