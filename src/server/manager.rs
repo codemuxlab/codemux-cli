@@ -511,11 +511,15 @@ impl SessionManagerActor {
         }
 
         // Use provided resume session ID or generate new one
-        let session_id = resume_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+        let (session_id, is_resuming) = match resume_session_id {
+            Some(id) => (id, true),
+            None => (Uuid::new_v4().to_string(), false),
+        };
 
         // Add session ID to args if the agent is Claude
+        // Only add --session-id if we're NOT resuming (resume already has the session ID)
         let mut final_args = args.clone();
-        if agent.to_lowercase() == "claude" {
+        if agent.to_lowercase() == "claude" && !is_resuming {
             final_args.push("--session-id".to_string());
             final_args.push(session_id.clone());
         }

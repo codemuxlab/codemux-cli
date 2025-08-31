@@ -958,6 +958,12 @@ impl SessionTui {
                     .block(Block::default().borders(Borders::NONE));
                     // No wrapping - each line should be rendered exactly as provided
                 f.render_widget(terminal_widget, terminal_area);
+                
+                // Draw disconnection overlay if not connected
+                // Use the full screen size for proper centering
+                if !matches!(connection_status, PtyConnectionStatus::Connected) {
+                    draw_connection_overlay(f, f.area(), &connection_status);
+                }
 
             } else {
                 // Normal monitoring mode layout
@@ -1004,6 +1010,11 @@ impl SessionTui {
                     .alignment(Alignment::Center)
                     .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Gray)));
                 f.render_widget(footer, chunks[2]);
+                
+                // Draw disconnection overlay if not connected (for monitoring mode too)
+                if !matches!(connection_status, PtyConnectionStatus::Connected) {
+                    draw_connection_overlay(f, f.area(), &connection_status);
+                }
             }
         })?;
 
@@ -1475,4 +1486,79 @@ fn format_duration(duration: Duration) -> String {
     } else {
         format!("{}s", seconds)
     }
+}
+
+fn draw_connection_overlay(f: &mut Frame, area: Rect, connection_status: &PtyConnectionStatus) {
+    use ratatui::widgets::Clear;
+    
+    // Calculate center position for overlay
+    let overlay_width = 50;
+    let overlay_height = 7;
+    
+    // Ensure we don't overflow the screen
+    let overlay_width = overlay_width.min(area.width);
+    let overlay_height = overlay_height.min(area.height);
+    
+    let overlay_x = area.width.saturating_sub(overlay_width) / 2;
+    let overlay_y = area.height.saturating_sub(overlay_height) / 2;
+    
+    let overlay_area = Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
+    
+    // Determine style and content based on connection status
+    let (title, message, style) = match connection_status {
+        PtyConnectionStatus::Disconnected => (
+            " ⚠️  DISCONNECTED ",
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("WebSocket connection lost", Style::default().fg(Color::White))
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Attempting to reconnect...", Style::default().fg(Color::Gray))
+                ]),
+            ],
+            Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD)
+        ),
+        PtyConnectionStatus::Reconnecting { attempt, max_attempts } => (
+            " 🔄 RECONNECTING ",
+            vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(
+                        format!("Reconnection attempt {} of {}", attempt, max_attempts),
+                        Style::default().fg(Color::White)
+                    )
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("Please wait...", Style::default().fg(Color::Gray))
+                ]),
+            ],
+            Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)
+        ),
+        PtyConnectionStatus::Connected => {
+            // This shouldn't happen as we only show overlay when not connected
+            return;
+        }
+    };
+    
+    // Create the overlay block with a clear background
+    let overlay_block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(style)
+        .style(Style::default().bg(Color::Black));
+    
+    // Create the content paragraph
+    let overlay_content = Paragraph::new(message)
+        .block(overlay_block)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::White));
+    
+    // Clear the area behind the overlay first (optional, for better visibility)
+    f.render_widget(Clear, overlay_area);
+    
+    // Render the overlay
+    f.render_widget(overlay_content, overlay_area);
 }

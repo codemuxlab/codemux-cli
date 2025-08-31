@@ -359,22 +359,17 @@ impl PtySession {
         // Set working directory to provided path
         cmd.cwd(working_dir);
 
-        // Set environment variables for proper terminal behavior
+        // Inherit all environment variables from parent process
+        for (key, value) in std::env::vars() {
+            cmd.env(&key, &value);
+        }
+        
+        // Override specific environment variables for proper terminal behavior
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         cmd.env("FORCE_COLOR", "1");
         cmd.env("COLUMNS", initial_cols.to_string());
         cmd.env("LINES", initial_rows.to_string());
-
-        // Preserve important environment variables
-        for (key, value) in std::env::vars() {
-            match key.as_str() {
-                "HOME" | "USER" | "PATH" | "SHELL" | "LANG" | "LC_ALL" | "PWD" => {
-                    cmd.env(key, value);
-                }
-                _ => {}
-            }
-        }
 
         tracing::info!("Spawning command: {} with args: {:?}", agent, args);
         let _child = pty_pair.slave.spawn_command(cmd)?;
