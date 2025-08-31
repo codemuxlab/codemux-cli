@@ -246,12 +246,15 @@ impl SessionManagerHandle {
         response_rx.await.unwrap_or_else(|_| vec![])
     }
 
-    pub async fn get_recent_project_sessions(&self, project_path: std::path::PathBuf) -> Vec<SessionInfo> {
+    pub async fn get_recent_project_sessions(
+        &self,
+        project_path: std::path::PathBuf,
+    ) -> Vec<SessionInfo> {
         let (response_tx, response_rx) = oneshot::channel();
 
-        let command = SessionCommand::GetRecentProjectSessions { 
+        let command = SessionCommand::GetRecentProjectSessions {
             project_path,
-            response_tx 
+            response_tx,
         };
 
         if self.command_tx.send(command).is_err() {
@@ -279,35 +282,43 @@ impl SessionManagerActor {
             Ok(()) => tracing::info!("Claude projects cache initialized successfully"),
             Err(e) => tracing::warn!("Failed to initialize Claude projects cache: {}", e),
         }
-        
+
         // Process commands
         while let Some(command) = self.command_rx.recv().await {
             self.handle_command(command).await;
         }
     }
-    
+
     async fn initialize_claude_cache(&mut self) -> Result<()> {
         let mut cache = ClaudeProjectsCache::new()?;
         cache.initialize().await?;
-        
+
         // Get the event receiver before moving cache
-        let mut event_rx = cache.event_rx.take()
+        let mut event_rx = cache
+            .event_rx
+            .take()
             .ok_or_else(|| anyhow!("Failed to get cache event receiver"))?;
-        
+
         // Store the cache
         self.claude_cache = Some(cache);
-        
+
         // Spawn a task to handle cache events
         tokio::spawn(async move {
             while let Some(event) = event_rx.recv().await {
                 match event {
                     CacheEvent::SessionAdded(session) => {
-                        tracing::info!("Cache: Session added - {} at {:?}", 
-                            session.session_id, session.file_path);
+                        tracing::info!(
+                            "Cache: Session added - {} at {:?}",
+                            session.session_id,
+                            session.file_path
+                        );
                     }
                     CacheEvent::SessionModified(session) => {
-                        tracing::debug!("Cache: Session modified - {} at {:?}", 
-                            session.session_id, session.file_path);
+                        tracing::debug!(
+                            "Cache: Session modified - {} at {:?}",
+                            session.session_id,
+                            session.file_path
+                        );
                     }
                     CacheEvent::SessionDeleted(session_id) => {
                         tracing::info!("Cache: Session deleted - {}", session_id);
@@ -315,41 +326,50 @@ impl SessionManagerActor {
                 }
             }
         });
-        
+
         // Log initial cache stats
         if let Some(cache) = &self.claude_cache {
             let sessions = cache.get_all_sessions().await;
-            tracing::info!("Claude cache loaded with {} historical sessions", sessions.len());
-            
+            tracing::info!(
+                "Claude cache loaded with {} historical sessions",
+                sessions.len()
+            );
+
             // Auto-discover projects from cached sessions
             for session in sessions {
                 // Check if we already have this project
                 let project_path_str = session.project_path.to_string_lossy().to_string();
-                let project_exists = self.projects.values()
+                let project_exists = self
+                    .projects
+                    .values()
                     .any(|p| p.path.to_string_lossy() == project_path_str);
-                
+
                 if !project_exists {
                     // Auto-create project from cached session
-                    let project_name = session.project_path
+                    let project_name = session
+                        .project_path
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unnamed")
                         .to_string();
-                    
+
                     let project_id = Uuid::new_v4().to_string();
                     let project = Project {
                         id: project_id.clone(),
                         name: project_name.clone(),
                         path: session.project_path.clone(),
                     };
-                    
+
                     self.projects.insert(project_id, project);
-                    tracing::info!("Auto-discovered project from cache: {} at {:?}", 
-                        project_name, session.project_path);
+                    tracing::info!(
+                        "Auto-discovered project from cache: {} at {:?}",
+                        project_name,
+                        session.project_path
+                    );
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -399,7 +419,9 @@ impl SessionManagerActor {
                 project_id,
                 response_tx,
             } => {
-                let result = self.resume_session(session_id, agent, args, project_id).await;
+                let result = self
+                    .resume_session(session_id, agent, args, project_id)
+                    .await;
                 let _ = response_tx.send(result);
             }
             SessionCommand::CreateProject {
@@ -414,7 +436,10 @@ impl SessionManagerActor {
                 let result = self.list_projects();
                 let _ = response_tx.send(result);
             }
-            SessionCommand::GetRecentProjectSessions { project_path, response_tx } => {
+            SessionCommand::GetRecentProjectSessions {
+                project_path,
+                response_tx,
+            } => {
                 let result = self.get_recent_project_sessions(&project_path).await;
                 let _ = response_tx.send(result);
             }
@@ -485,8 +510,10 @@ impl SessionManagerActor {
                 (Some(temp_project_id), Some(path_buf))
             }
         } else {
-            // No project or path specified
-            (None, None)
+            // No project or path specified - use current directory as default
+            let current_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            (None, Some(current_dir))
         };
 
         tracing::debug!(
@@ -494,7 +521,12 @@ impl SessionManagerActor {
             session_id,
             agent
         );
-        let (session, channels) = PtySession::new(session_id.clone(), agent.clone(), final_args, working_dir)?;
+        let (session, channels) = PtySession::new(
+            session_id.clone(),
+            agent.clone(),
+            final_args,
+            working_dir.expect("working_dir should always be Some"),
+        )?;
         tracing::debug!(
             "SessionManager - PTY session created, channels available, spawning start task"
         );
@@ -556,30 +588,37 @@ impl SessionManagerActor {
                 status: "running".to_string(),
                 session_type: SessionType::Active,
                 last_modified: Some(chrono::Utc::now().to_rfc3339()),
-            last_message: None, // Active sessions don't have historical messages
+                last_message: None, // Active sessions don't have historical messages
             });
         }
-        
+
         // If not active, check the cache for historical sessions
         if let Some(cache) = &self.claude_cache {
             if let Some(cached_session) = cache.get_session(session_id).await {
                 // Find the project ID for this cached session
-                let project_id = self.projects.values()
+                let project_id = self
+                    .projects
+                    .values()
                     .find(|p| p.path == cached_session.project_path)
                     .map(|p| p.id.clone());
-                
+
                 return Some(SessionInfo {
                     id: cached_session.session_id,
                     agent: cached_session.agent,
                     project: project_id,
-                    status: if cached_session.is_active { "inactive" } else { "completed" }.to_string(),
+                    status: if cached_session.is_active {
+                        "inactive"
+                    } else {
+                        "completed"
+                    }
+                    .to_string(),
                     session_type: SessionType::Historical,
                     last_modified: Some(cached_session.last_modified.to_rfc3339()),
                     last_message: cached_session.last_message.clone(),
                 });
             }
         }
-        
+
         None
     }
 
@@ -620,7 +659,7 @@ impl SessionManagerActor {
                 status: "running".to_string(),
                 session_type: SessionType::Active,
                 last_modified: Some(chrono::Utc::now().to_rfc3339()),
-            last_message: None, // Active sessions don't have historical messages
+                last_message: None, // Active sessions don't have historical messages
             })
             .collect()
     }
@@ -636,7 +675,10 @@ impl SessionManagerActor {
 
         // First, check if the session is already active
         if self.sessions.contains_key(&session_id) {
-            tracing::warn!("Session {} is already active, returning existing session", session_id);
+            tracing::warn!(
+                "Session {} is already active, returning existing session",
+                session_id
+            );
             if let Some(session_info) = self.get_session(&session_id).await {
                 return Ok(session_info);
             }
@@ -645,7 +687,7 @@ impl SessionManagerActor {
         // Check if we have stored session info for this session ID
         // For now, we'll create a new PTY session with the provided parameters
         // In a full implementation, we might want to restore from persisted JSONL files
-        
+
         // Determine project path from project_id or cached session data
         let project_path = if let Some(project_id) = &project_id {
             self.projects.get(project_id).map(|p| p.path.clone())
@@ -664,21 +706,28 @@ impl SessionManagerActor {
         let mut resume_args = args.clone();
         if agent.to_lowercase() == "claude" {
             // Check if resume flag is already present
-            let has_resume = resume_args.iter().any(|arg| arg == "--resume" || arg.starts_with("--resume="));
+            let has_resume = resume_args
+                .iter()
+                .any(|arg| arg == "--resume" || arg.starts_with("--resume="));
             if !has_resume {
                 resume_args.push("--resume".to_string());
                 resume_args.push(session_id.clone());
-                tracing::info!("Added --resume {} flag for Claude session resumption", session_id);
+                tracing::info!(
+                    "Added --resume {} flag for Claude session resumption",
+                    session_id
+                );
             }
         }
-        
+
         tracing::info!("Creating new PTY session for resumed session {} with resume args: {:?} in directory: {:?}", session_id, resume_args, project_path);
-        
+
         let (pty_session, channels) = PtySession::new(
             session_id.clone(),
             agent.clone(),
             resume_args,
-            project_path,
+            project_path.unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            }),
         )?;
 
         // Store the session with the specific session_id
@@ -691,7 +740,7 @@ impl SessionManagerActor {
 
         self.sessions.insert(session_id.clone(), session_state);
 
-        // Spawn the PTY session start task 
+        // Spawn the PTY session start task
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
             tracing::info!("Starting resumed PTY session {}", session_id_clone);
@@ -770,31 +819,41 @@ impl SessionManagerActor {
     }
 
     /// Get the 5 most recent historical sessions for a project from the Claude cache
-    async fn get_recent_project_sessions(&self, project_path: &std::path::Path) -> Vec<crate::core::session::SessionInfo> {
+    async fn get_recent_project_sessions(
+        &self,
+        project_path: &std::path::Path,
+    ) -> Vec<crate::core::session::SessionInfo> {
         if let Some(cache) = &self.claude_cache {
             let mut sessions = cache.get_project_sessions(project_path).await;
-            
+
             // Sort by last_modified (most recent first) and take only 5
             sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
             sessions.truncate(5);
-            
+
             // Convert to SessionInfo
             sessions
                 .into_iter()
                 .map(|cached_session| {
                     // Find the project ID for this cached session
-                    let project_id = self.projects.values()
+                    let project_id = self
+                        .projects
+                        .values()
                         .find(|p| p.path == cached_session.project_path)
                         .map(|p| p.id.clone());
-                    
+
                     crate::core::session::SessionInfo {
                         id: cached_session.session_id,
                         agent: cached_session.agent,
                         project: project_id,
-                        status: if cached_session.is_active { "inactive" } else { "completed" }.to_string(),
+                        status: if cached_session.is_active {
+                            "inactive"
+                        } else {
+                            "completed"
+                        }
+                        .to_string(),
                         session_type: crate::core::session::SessionType::Historical,
                         last_modified: Some(cached_session.last_modified.to_rfc3339()),
-                    last_message: cached_session.last_message.clone(),
+                        last_message: cached_session.last_message.clone(),
                     }
                 })
                 .collect()

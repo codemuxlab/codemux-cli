@@ -52,7 +52,7 @@ impl CodeMuxClient {
         T: for<'de> Deserialize<'de>,
     {
         let response_text = response.text().await?;
-        
+
         // Try JSON API format first
         if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<T>>(&response_text) {
             return Ok(json_api.data);
@@ -64,15 +64,17 @@ impl CodeMuxClient {
         Ok(data)
     }
 
-    /// Extract data from JSON API resource response 
+    /// Extract data from JSON API resource response
     async fn extract_from_json_api_resource<T>(response: reqwest::Response) -> Result<T>
     where
         T: for<'de> Deserialize<'de>,
     {
         let response_text = response.text().await?;
-        
+
         // Try JSON API resource format first
-        if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<JsonApiResource<T>>>(&response_text) {
+        if let Ok(json_api) =
+            serde_json::from_str::<JsonApiDocument<JsonApiResource<T>>>(&response_text)
+        {
             if let Some(attributes) = json_api.data.attributes {
                 return Ok(attributes);
             }
@@ -90,9 +92,11 @@ impl CodeMuxClient {
         T: for<'de> Deserialize<'de>,
     {
         let response_text = response.text().await?;
-        
+
         // Try JSON API resource array format first
-        if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<Vec<JsonApiResource<T>>>>(&response_text) {
+        if let Ok(json_api) =
+            serde_json::from_str::<JsonApiDocument<Vec<JsonApiResource<T>>>>(&response_text)
+        {
             let mut results = Vec::new();
             for resource in json_api.data {
                 if let Some(attributes) = resource.attributes {

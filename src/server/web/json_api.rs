@@ -45,8 +45,12 @@ pub struct JsonApiResource<T: TS> {
 #[ts(export)]
 #[serde(untagged)]
 pub enum JsonApiRelationship {
-    ToOne { data: JsonApiResourceIdentifier },
-    ToMany { data: Vec<JsonApiResourceIdentifier> },
+    ToOne {
+        data: JsonApiResourceIdentifier,
+    },
+    ToMany {
+        data: Vec<JsonApiResourceIdentifier>,
+    },
 }
 
 /// JSON API resource identifier
@@ -72,22 +76,23 @@ pub struct JsonApiError {
 
 // Helper functions to create JSON API responses
 
-use crate::core::session::{ProjectWithSessions, ProjectInfo, SessionInfo};
+use crate::core::session::{ProjectInfo, ProjectWithSessions, SessionInfo};
 
 impl From<ProjectWithSessions> for JsonApiResource<ProjectWithSessions> {
     fn from(project: ProjectWithSessions) -> Self {
         let mut relationships = HashMap::new();
-        
+
         // Add sessions relationship
         if !project.sessions.is_empty() {
-            let session_identifiers: Vec<JsonApiResourceIdentifier> = project.sessions
+            let session_identifiers: Vec<JsonApiResourceIdentifier> = project
+                .sessions
                 .iter()
                 .map(|s| JsonApiResourceIdentifier {
                     resource_type: "session".to_string(),
                     id: s.id.clone(),
                 })
                 .collect();
-            
+
             relationships.insert(
                 "sessions".to_string(),
                 JsonApiRelationship::ToMany {
@@ -95,12 +100,16 @@ impl From<ProjectWithSessions> for JsonApiResource<ProjectWithSessions> {
                 },
             );
         }
-        
+
         JsonApiResource {
             resource_type: "project".to_string(),
             id: project.id.clone(),
             attributes: Some(project.clone()),
-            relationships: if relationships.is_empty() { None } else { Some(relationships) },
+            relationships: if relationships.is_empty() {
+                None
+            } else {
+                Some(relationships)
+            },
         }
     }
 }
@@ -108,7 +117,7 @@ impl From<ProjectWithSessions> for JsonApiResource<ProjectWithSessions> {
 impl From<SessionInfo> for JsonApiResource<SessionInfo> {
     fn from(session: SessionInfo) -> Self {
         let mut relationships = HashMap::new();
-        
+
         // Add project relationship if exists
         if let Some(project_id) = &session.project {
             relationships.insert(
@@ -121,12 +130,16 @@ impl From<SessionInfo> for JsonApiResource<SessionInfo> {
                 },
             );
         }
-        
+
         JsonApiResource {
             resource_type: "session".to_string(),
             id: session.id.clone(),
             attributes: Some(session.clone()),
-            relationships: if relationships.is_empty() { None } else { Some(relationships) },
+            relationships: if relationships.is_empty() {
+                None
+            } else {
+                Some(relationships)
+            },
         }
     }
 }
@@ -144,10 +157,7 @@ impl From<ProjectInfo> for JsonApiResource<ProjectInfo> {
 
 /// Create a successful JSON API response
 pub fn json_api_response<T>(data: T) -> JsonApiDocument<T> {
-    JsonApiDocument {
-        data,
-        meta: None,
-    }
+    JsonApiDocument { data, meta: None }
 }
 
 /// Create an error JSON API response

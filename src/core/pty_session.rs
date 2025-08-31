@@ -8,6 +8,16 @@ use std::time::Instant;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use ts_rs::TS;
 
+// Alacritty terminal imports
+use alacritty_terminal::{
+    event::VoidListener,
+    grid::Dimensions,
+    index::{Column, Line, Point},
+    term::cell::Flags as CellFlags,
+    term::{test::TermSize, Config as TermConfig},
+    Term,
+};
+
 /// Default PTY dimensions
 pub const DEFAULT_PTY_COLS: u16 = 80;
 pub const DEFAULT_PTY_ROWS: u16 = 30;
@@ -45,7 +55,7 @@ impl ScrollThrottle {
             min_interval: std::time::Duration::from_millis(50), // 20 FPS max
         }
     }
-    
+
     fn should_update(&mut self) -> bool {
         let now = std::time::Instant::now();
         if now.duration_since(self.last_update) >= self.min_interval {
@@ -298,8 +308,9 @@ pub struct PtySession {
     // Terminal buffer for new client snapshots (stores recent output)
     buffer: Arc<Mutex<Vec<u8>>>,
 
-    // VT100 terminal state and parser
-    vt_parser: Arc<Mutex<vt100::Parser>>,
+    // Alacritty terminal state and VTE parser
+    term: Arc<Mutex<Term<VoidListener>>>,
+    vte_parser: Arc<Mutex<alacritty_terminal::vte::ansi::Processor>>,
     grid_state: Arc<Mutex<HashMap<(u16, u16), GridCell>>>,
     cursor_pos: Arc<Mutex<(u16, u16)>>,
     cursor_visible: Arc<Mutex<bool>>,
@@ -317,7 +328,12 @@ pub struct PtySession {
 
 impl PtySession {
     /// Create a new PTY session with the specified agent and arguments
-    pub fn new(id: String, agent: String, args: Vec<String>) -> Result<(Self, PtyChannels)> {
+    pub fn new(
+        id: String,
+        agent: String,
+        args: Vec<String>,
+        working_dir: std::path::PathBuf,
+    ) -> Result<(Self, PtyChannels)> {
         let pty_system = NativePtySystem::default();
 
         // Use environment variables for initial PTY size if available
@@ -342,10 +358,13 @@ impl PtySession {
             cmd.arg(arg);
         }
 
-        // Set working directory to current directory (project root)
-        if let Ok(current_dir) = std::env::current_dir() {
-            cmd.cwd(current_dir);
-        }
+        // Set working directory
+        tracing::debug!(
+            "Setting working directory for session {} to: {:?}",
+            id,
+            working_dir
+        );
+        cmd.cwd(working_dir);
 
         // Set environment variables for proper terminal behavior
         cmd.env("TERM", "xterm-256color");
@@ -400,11 +419,16 @@ impl PtySession {
                 pixel_height: 0,
             })),
             buffer: Arc::new(Mutex::new(Vec::new())),
-            vt_parser: Arc::new(Mutex::new(vt100::Parser::new(
-                initial_rows,
-                initial_cols,
-                10000, // Enable scrollback buffer with 10,000 lines
+            term: Arc::new(Mutex::new(Term::new(
+                TermConfig::default(),
+                &TermSize::new(initial_cols as usize, initial_rows as usize),
+                VoidListener,
             ))),
+            vte_parser: Arc::new(Mutex::new({
+                use alacritty_terminal::vte::ansi;
+                let parser: ansi::Processor = ansi::Processor::new();
+                parser
+            })),
             grid_state: Arc::new(Mutex::new(HashMap::new())),
             cursor_pos: Arc::new(Mutex::new((0, 0))),
             cursor_visible: Arc::new(Mutex::new(true)), // Default to visible
@@ -433,7 +457,8 @@ impl PtySession {
             writer,
             current_size,
             buffer,
-            vt_parser,
+            term,
+            vte_parser,
             grid_state,
             cursor_pos,
             cursor_visible,
@@ -523,7 +548,8 @@ impl PtySession {
 
         // Create async data processor task
         let processor_buffer = buffer.clone();
-        let processor_vt_parser = vt_parser.clone();
+        let processor_term = term.clone();
+        let processor_vte_parser = vte_parser.clone();
         let processor_grid_state = grid_state.clone();
         let processor_cursor_pos = cursor_pos.clone();
         let processor_cursor_visible = cursor_visible.clone();
@@ -566,11 +592,10 @@ impl PtySession {
 
                             // Track cursor before processing
                             let cursor_before = {
-                                let parser_guard = processor_vt_parser.lock().await;
-                                let screen = parser_guard.screen();
-                                let cursor_pos = (screen.cursor_position().0, screen.cursor_position().1);
-                                tracing::trace!("Cursor BEFORE processing: ({}, {})", cursor_pos.0, cursor_pos.1);
-                                cursor_pos
+                                let _term_guard = processor_term.lock().await;
+                                // For now, we'll track cursor through VTE processing
+                                // Alacritty doesn't expose cursor position directly
+                                (0, 0) // Will be updated during VTE processing
                             };
 
                             // First, update buffer and parse all data through VT100
@@ -588,40 +613,32 @@ impl PtySession {
                                 }
                             }
 
-                            // Process through VT100 parser
+                            // Process data through VTE parser (correct approach like alacritty)
                             {
-                                let mut parser_guard = processor_vt_parser.lock().await;
-                                parser_guard.process(&data);
-                            }
+                                let mut term_guard = processor_term.lock().await;
+                                let mut parser_guard = processor_vte_parser.lock().await;
 
-                            // Check cursor visibility from VT100 screen state
-                            {
-                                let parser_guard = processor_vt_parser.lock().await;
-                                let screen = parser_guard.screen();
-                                let vt_cursor_visible = !screen.hide_cursor();
-                                drop(parser_guard);
-
-                                let mut cursor_vis_guard = processor_cursor_visible.lock().await;
-                                if *cursor_vis_guard != vt_cursor_visible {
-                                    *cursor_vis_guard = vt_cursor_visible;
-                                    tracing::trace!("Cursor visibility changed to: {}", vt_cursor_visible);
+                                // Feed raw bytes to VTE parser byte-by-byte
+                                for &byte in &data {
+                                    parser_guard.advance(&mut *term_guard, byte);
                                 }
                             }
+
+                            // Cursor visibility is tracked by the terminal itself
+                            // We'll update this during grid extraction
 
                             all_data.extend_from_slice(&data);
                         }
 
                         // Log first 100 chars of processed data for debugging
                         let data_sample = String::from_utf8_lossy(&all_data[..all_data.len().min(100)]).replace('\x1b', "\\x1b");
-                        tracing::debug!("VT100 parser processed {} total bytes: '{}'", all_data.len(), data_sample);
+                        tracing::debug!("Alacritty terminal processed {} total bytes: '{}'", all_data.len(), data_sample);
 
                         // Track cursor after processing
                         let cursor_after = {
-                            let parser_guard = processor_vt_parser.lock().await;
-                            let screen = parser_guard.screen();
-                            let cursor_pos = (screen.cursor_position().0, screen.cursor_position().1);
-                            tracing::trace!("Cursor AFTER processing: ({}, {})", cursor_pos.0, cursor_pos.1);
-                            cursor_pos
+                            // Cursor is now tracked through the terminal state
+                            // Will be extracted during grid generation
+                            (0, 0)
                         };
 
                         if cursor_before != cursor_after {
@@ -632,7 +649,7 @@ impl PtySession {
                         // Now generate a single grid update for all changes
                         let grid_update = Self::extract_grid_changes(
                             &processor_agent,
-                            &processor_vt_parser,
+                            &processor_term,
                             &processor_grid_state,
                             &processor_cursor_pos,
                             &processor_cursor_visible,
@@ -767,7 +784,7 @@ impl PtySession {
 
         // Create input handler task
         let input_writer = writer.clone();
-        let input_vt_parser = vt_parser.clone();
+        let input_term = term.clone();
         let input_internal_tx = internal_control_tx.clone();
         let input_task = tokio::spawn(async move {
             let mut input_rx = input_rx;
@@ -775,14 +792,15 @@ impl PtySession {
                 match &msg.input {
                     PtyInput::Key { event, .. } => {
                         tracing::debug!("Processing key event: {:?}", event);
-                        
+
                         // Reset scroll position on any key press to return to current content
-                        if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll) {
+                        if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll)
+                        {
                             tracing::warn!("Failed to send scroll reset message: {}", e);
                         } else {
-                            tracing::debug!("Sent scroll reset on key press");
+                            tracing::trace!("Sent scroll reset on key press");
                         }
-                        
+
                         let bytes = Self::key_event_to_bytes(event);
 
                         let mut writer_guard = input_writer.lock().await;
@@ -795,32 +813,67 @@ impl PtySession {
                     PtyInput::Scroll {
                         direction, lines, ..
                     } => {
-                        tracing::debug!("Processing scroll event: {:?} {} lines", direction, lines);
+                        tracing::trace!("Processing scroll event: {:?} {} lines", direction, lines);
 
-                        // Use VT100 parser's built-in scrollback - it handles bounds internally
+                        // Use alacritty's safe scrollback with proper bounds checking
                         {
-                            let mut parser_guard = input_vt_parser.lock().await;
-                            let current_scrollback = parser_guard.screen().scrollback();
+                            let term_guard = input_term.lock().await;
+                            let grid = term_guard.grid();
+                            let current_offset = grid.display_offset();
 
-                            match direction {
+                            // Get total lines for safe bounds checking - THIS PREVENTS OVERFLOW!
+                            let total_lines = term_guard.total_lines();
+                            let screen_lines = term_guard.screen_lines();
+                            let max_scroll = total_lines.saturating_sub(screen_lines);
+
+                            drop(term_guard);
+
+                            let _new_offset = match direction {
                                 ScrollDirection::Up => {
-                                    let new_scrollback = current_scrollback + *lines as usize;
-                                    parser_guard.set_scrollback(new_scrollback);
+                                    // Scroll up (increase offset) but cap at max
+                                    let target = current_offset + *lines as usize;
+                                    let safe_offset = target.min(max_scroll);
                                     tracing::debug!(
-                                        "Scrolled up from {} to {}",
-                                        current_scrollback,
-                                        new_scrollback
+                                        "Scrolled up from {} to {} (max: {})",
+                                        current_offset,
+                                        safe_offset,
+                                        max_scroll
                                     );
+                                    safe_offset
                                 }
                                 ScrollDirection::Down => {
-                                    let new_scrollback =
-                                        current_scrollback.saturating_sub(*lines as usize);
-                                    parser_guard.set_scrollback(new_scrollback);
+                                    // Scroll down (decrease offset) but floor at 0
+                                    let safe_offset =
+                                        current_offset.saturating_sub(*lines as usize);
                                     tracing::debug!(
                                         "Scrolled down from {} to {}",
-                                        current_scrollback,
-                                        new_scrollback
+                                        current_offset,
+                                        safe_offset
                                     );
+                                    safe_offset
+                                }
+                            };
+
+                            // Apply the scroll using alacritty's scroll_display method
+                            {
+                                use alacritty_terminal::grid::Scroll;
+                                let mut term_guard = input_term.lock().await;
+
+                                match direction {
+                                    ScrollDirection::Up => {
+                                        term_guard.scroll_display(Scroll::Delta(*lines as i32));
+                                        tracing::trace!(
+                                            "Applied scroll up {} lines using alacritty",
+                                            lines
+                                        );
+                                    }
+                                    ScrollDirection::Down => {
+                                        term_guard.scroll_display(Scroll::Delta(-(*lines as i32)));
+                                        tracing::trace!(
+                                            "Applied scroll down {} lines using alacritty",
+                                            lines
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -834,7 +887,7 @@ impl PtySession {
                                 e
                             );
                         } else {
-                            tracing::debug!("Scroll event processed, sent trigger to main control");
+                            tracing::trace!("Scroll event processed, sent trigger to main control");
                         }
                     }
                 }
@@ -846,7 +899,7 @@ impl PtySession {
         let control_current_size = current_size.clone();
         let control_size_tx = size_tx.clone();
         let control_grid_tx = grid_tx.clone();
-        let control_vt_parser = vt_parser.clone();
+        let control_term = term.clone();
         let control_cursor_pos = cursor_pos.clone();
         let control_cursor_visible = cursor_visible.clone();
 
@@ -891,10 +944,10 @@ impl PtySession {
                                     *size_guard = new_size;
                                 }
 
-                                // Update VT100 parser size
+                                // Update alacritty terminal size
                                 {
-                                    let mut parser_guard = control_vt_parser.lock().await;
-                                    parser_guard.set_size(rows, cols);
+                                    let mut term_guard = control_term.lock().await;
+                                    term_guard.resize(TermSize::new(cols as usize, rows as usize));
                                 }
 
                                 // Broadcast the new size to subscribers
@@ -907,7 +960,7 @@ impl PtySession {
                             PtyControlMessage::RequestKeyframe { response_tx } => {
                                 tracing::debug!("Control task - Keyframe requested by client");
                                 let keyframe = Self::generate_keyframe(
-                                    &control_vt_parser,
+                                    &control_term,
                                     &control_cursor_pos,
                                     &control_cursor_visible,
                                     &control_current_size,
@@ -934,9 +987,9 @@ impl PtySession {
                             InternalControlMessage::TriggerGridUpdate => {
                                 // Throttle scroll updates to avoid overwhelming the system
                                 if scroll_throttle.should_update() {
-                                    tracing::debug!("Control task - Triggering grid update after scroll");
+                                    tracing::trace!("Control task - Triggering grid update after scroll");
                                     let keyframe = Self::generate_keyframe(
-                                        &control_vt_parser,
+                                        &control_term,
                                         &control_cursor_pos,
                                         &control_cursor_visible,
                                         &control_current_size,
@@ -947,24 +1000,28 @@ impl PtySession {
                                     if let Err(e) = control_grid_tx.send(keyframe) {
                                         tracing::warn!("Failed to send scroll keyframe to grid channel: {}", e);
                                     } else {
-                                        tracing::debug!("Scroll keyframe sent to grid channel");
+                                        tracing::trace!("Scroll keyframe sent to grid channel");
                                     }
                                 } else {
                                     tracing::trace!("Scroll update throttled - too soon since last update");
                                 }
                             }
                             InternalControlMessage::ResetScroll => {
-                                tracing::debug!("Control task - Resetting scroll position on key press");
-                                
+                                tracing::trace!("Control task - Resetting scroll position on key press");
+
                                 // Reset scrollback to 0 (current content)
                                 {
-                                    let mut parser_guard = control_vt_parser.lock().await;
-                                    parser_guard.set_scrollback(0);
+                                    use alacritty_terminal::grid::Scroll;
+                                    let mut term_guard = control_term.lock().await;
+
+                                    // Reset to bottom (current content) by scrolling to end
+                                    term_guard.scroll_display(Scroll::Bottom);
+                                    tracing::trace!("Reset scroll to bottom using alacritty");
                                 }
-                                
+
                                 // Generate and send keyframe with reset scroll position
                                 let keyframe = Self::generate_keyframe(
-                                    &control_vt_parser,
+                                    &control_term,
                                     &control_cursor_pos,
                                     &control_cursor_visible,
                                     &control_current_size,
@@ -974,7 +1031,7 @@ impl PtySession {
                                 if let Err(e) = control_grid_tx.send(keyframe) {
                                     tracing::warn!("Failed to send scroll reset keyframe to grid channel: {}", e);
                                 } else {
-                                    tracing::debug!("Scroll reset keyframe sent to grid channel");
+                                    tracing::trace!("Scroll reset keyframe sent to grid channel");
                                 }
                             }
                         }
@@ -1046,38 +1103,50 @@ impl PtySession {
 }
 
 impl PtySession {
-    /// Extract grid changes from VT100 parser and generate keyframe/diff updates
+    /// Extract grid changes from alacritty terminal and generate keyframe/diff updates
     async fn extract_grid_changes(
         _agent: &str,
-        vt_parser: &Arc<Mutex<vt100::Parser>>,
+        term: &Arc<Mutex<Term<VoidListener>>>,
         grid_state: &Arc<Mutex<HashMap<(u16, u16), GridCell>>>,
         cursor_pos: &Arc<Mutex<(u16, u16)>>,
         cursor_visible: &Arc<Mutex<bool>>,
         current_size: &Arc<Mutex<PtySize>>,
         previous_grid: &mut HashMap<(u16, u16), GridCell>,
     ) -> Option<GridUpdateMessage> {
-        let parser_guard = vt_parser.lock().await;
-        let screen = parser_guard.screen();
+        let term_guard = term.lock().await;
+        let grid = term_guard.grid();
         let size_guard = current_size.lock().await;
-        let size = *size_guard;
+        let pty_size = *size_guard;
         drop(size_guard);
+
+        // Use actual grid dimensions, not PTY size which might be different
+        let grid_rows = grid.screen_lines();
+        let grid_cols = grid.columns();
+
+        tracing::trace!("Grid extraction: PTY size {}x{}, Grid size {}x{}", 
+                       pty_size.rows, pty_size.cols, grid_rows, grid_cols);
 
         let mut current_grid = HashMap::new();
         let mut changes = Vec::new();
 
-        // Get regions that likely changed by comparing to VT100 dirty state
+        // Get regions that likely changed
         // For performance, we'll check all cells but optimize the comparison
         let mut cells_to_check = std::collections::HashSet::new();
 
         // First pass: collect all positions that currently have content
-        for row in 0..size.rows {
-            for col in 0..size.cols {
-                if let Some(cell) = screen.cell(row, col) {
-                    let content = cell.contents().to_string();
-                    // Include all cells with content, including spaces
-                    if !content.is_empty() {
-                        cells_to_check.insert((row, col));
-                    }
+        // Use display_iter() to get the correctly scrolled visible content  
+        for indexed in grid.display_iter() {
+            let point = indexed.point;
+            let cell = indexed.cell;
+            
+            // Convert the scrolled point to visible row coordinates (0-based from top)
+            let visible_row = (point.line.0 + grid.display_offset() as i32) as u16;
+            
+            // Only process cells within our visible area
+            if visible_row < grid_rows as u16 {
+                // Include all cells with content, including spaces  
+                if cell.c != ' ' {
+                    cells_to_check.insert((visible_row, point.column.0 as u16));
                 }
             }
         }
@@ -1089,47 +1158,38 @@ impl PtySession {
 
         // Third pass: process only the cells we need to check
         for &(row, col) in &cells_to_check {
-            if let Some(cell) = screen.cell(row, col) {
-                let content = cell.contents().to_string();
+            // Ensure we're within grid bounds
+            if row as usize >= grid_rows || col as usize >= grid_cols {
+                tracing::warn!("Skipping out-of-bounds cell access: ({}, {}) vs grid size {}x{}", 
+                              row, col, grid_rows, grid_cols);
+                continue;
+            }
+            
+            let point = Point::new(Line(row as i32), Column(col as usize));
+            let cell = &grid[point];
 
-                // Process all cells with content, including spaces
-                if !content.is_empty() {
-                    let grid_cell = GridCell {
-                        char: content,
-                        fg_color: Self::vt100_to_terminal_color(cell.fgcolor()),
-                        bg_color: Self::vt100_to_terminal_color(cell.bgcolor()),
-                        bold: cell.bold(),
-                        italic: cell.italic(),
-                        underline: cell.underline(),
-                        reverse: cell.inverse(),
-                    };
+            // Process all cells with content, including spaces
+            if cell.c != ' ' {
+                let grid_cell = GridCell {
+                    char: cell.c.to_string(),
+                    fg_color: Self::alacritty_to_terminal_color(cell.fg),
+                    bg_color: Self::alacritty_to_terminal_color(cell.bg),
+                    bold: cell.flags.contains(CellFlags::BOLD),
+                    italic: cell.flags.contains(CellFlags::ITALIC),
+                    underline: cell.flags.contains(CellFlags::UNDERLINE),
+                    reverse: cell.flags.contains(CellFlags::INVERSE),
+                };
 
-                    current_grid.insert((row, col), grid_cell.clone());
+                current_grid.insert((row, col), grid_cell.clone());
 
-                    // Check if this cell changed from previous state
-                    if let Some(prev_cell) = previous_grid.get(&(row, col)) {
-                        if prev_cell != &grid_cell {
-                            changes.push((row, col, grid_cell));
-                        }
-                    } else {
-                        // New cell (wasn't in previous grid)
+                // Check if this cell changed from previous state
+                if let Some(prev_cell) = previous_grid.get(&(row, col)) {
+                    if prev_cell != &grid_cell {
                         changes.push((row, col, grid_cell));
                     }
-                } else if previous_grid.contains_key(&(row, col)) {
-                    // Cell is empty now but was previously non-empty - this is a change
-                    changes.push((
-                        row,
-                        col,
-                        GridCell {
-                            char: " ".to_string(),
-                            fg_color: None,
-                            bg_color: None,
-                            bold: false,
-                            italic: false,
-                            underline: false,
-                            reverse: false,
-                        },
-                    ));
+                } else {
+                    // New cell (wasn't in previous grid)
+                    changes.push((row, col, grid_cell));
                 }
             } else if previous_grid.contains_key(&(row, col)) {
                 // Cell no longer exists but was previously present - cleared
@@ -1149,13 +1209,13 @@ impl PtySession {
             }
         }
 
-        // Update cursor position with Claude-specific logic
-        let vt_cursor = (screen.cursor_position().0, screen.cursor_position().1);
+        // Update cursor position from alacritty grid
         let mut cursor_guard = cursor_pos.lock().await;
         let old_cursor = *cursor_guard;
 
-        // Use VT100 cursor position directly
-        let new_cursor = vt_cursor;
+        // Get cursor position from alacritty grid
+        let cursor_point = grid.cursor.point;
+        let new_cursor = (cursor_point.line.0 as u16, cursor_point.column.0 as u16);
 
         let cursor_changed = old_cursor != new_cursor;
 
@@ -1191,9 +1251,17 @@ impl PtySession {
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);
 
-        // Get scrollback information
-        let scrollback_pos = screen.scrollback();
-        let scrollback_total = 10000; // Match the scrollback buffer size
+        // Get scrollback information - SAFE WITH BOUNDS!
+        let scrollback_pos = grid.display_offset();
+        let scrollback_total = term_guard.total_lines(); // Safe total lines count!
+
+        // Create size from grid dimensions
+        let grid_size = PtySize {
+            rows: grid_rows as u16,
+            cols: grid_cols as u16,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
 
         // Generate appropriate update message
         if previous_grid.is_empty() {
@@ -1201,7 +1269,7 @@ impl PtySession {
             *previous_grid = current_grid.clone();
             tracing::debug!("Sending keyframe with {} cells", current_grid.len());
             Some(GridUpdateMessage::Keyframe {
-                size: size.into(),
+                size: grid_size.into(),
                 cells: current_grid.clone().into_iter().collect(),
                 cursor: new_cursor,
                 cursor_visible: is_cursor_visible,
@@ -1238,50 +1306,79 @@ impl PtySession {
 
     /// Generate a keyframe from current terminal state
     async fn generate_keyframe(
-        vt_parser: &Arc<Mutex<vt100::Parser>>,
+        term: &Arc<Mutex<Term<VoidListener>>>,
         cursor_pos: &Arc<Mutex<(u16, u16)>>,
         cursor_visible: &Arc<Mutex<bool>>,
         current_size: &Arc<Mutex<PtySize>>,
     ) -> GridUpdateMessage {
-        let parser_guard = vt_parser.lock().await;
-        let screen = parser_guard.screen();
+        let term_guard = term.lock().await;
+        let grid = term_guard.grid();
         let size_guard = current_size.lock().await;
-        let size = *size_guard;
+        let _pty_size = *size_guard;
         drop(size_guard);
+
+        // Use actual grid dimensions
+        let grid_rows = grid.screen_lines();
+        let grid_cols = grid.columns();
 
         let mut current_grid = HashMap::new();
 
-        // Convert VT100 screen to our GridCell format
-        for row in 0..size.rows {
-            for col in 0..size.cols {
-                if let Some(cell) = screen.cell(row, col) {
-                    let grid_cell = GridCell {
-                        char: cell.contents().to_string(),
-                        fg_color: Self::vt100_to_terminal_color(cell.fgcolor()),
-                        bg_color: Self::vt100_to_terminal_color(cell.bgcolor()),
-                        bold: cell.bold(),
-                        italic: cell.italic(),
-                        underline: cell.underline(),
-                        reverse: cell.inverse(),
-                    };
+        // Convert alacritty grid to our GridCell format using display_iter for proper scrolling
+        let mut row = 0u16;
+        
+        for indexed in grid.display_iter() {
+            let point = indexed.point;
+            let cell = indexed.cell;
+            
+            // Track our position in the visible grid
+            let col = point.column.0 as u16;
 
-                    current_grid.insert((row, col), grid_cell);
+            let grid_cell = GridCell {
+                char: cell.c.to_string(),
+                fg_color: Self::alacritty_to_terminal_color(cell.fg),
+                bg_color: Self::alacritty_to_terminal_color(cell.bg),
+                bold: cell.flags.contains(CellFlags::BOLD),
+                italic: cell.flags.contains(CellFlags::ITALIC),
+                underline: cell.flags.contains(CellFlags::UNDERLINE),
+                reverse: cell.flags.contains(CellFlags::INVERSE),
+            };
+
+            current_grid.insert((row, col), grid_cell);
+            
+            // Move to next row when we reach the end of a line
+            if col == grid_cols as u16 - 1 {
+                row += 1;
+                if row >= grid_rows as u16 {
+                    break;
                 }
             }
         }
 
-        // Get cursor position and visibility
-        let cursor_guard = cursor_pos.lock().await;
-        let cursor = *cursor_guard;
-        drop(cursor_guard);
+        // Get cursor position from alacritty grid
+        let cursor_point = grid.cursor.point;
+        let cursor = (cursor_point.line.0 as u16, cursor_point.column.0 as u16);
+
+        // Update stored cursor position
+        {
+            let mut cursor_guard = cursor_pos.lock().await;
+            *cursor_guard = cursor;
+        }
 
         let cursor_vis_guard = cursor_visible.lock().await;
         let is_cursor_visible = *cursor_vis_guard;
         drop(cursor_vis_guard);
 
-        // Get scrollback information
-        let scrollback_pos = screen.scrollback();
-        let scrollback_total = 10000; // Match the scrollback buffer size
+        // Get scrollback information - SAFE WITH BOUNDS!
+        let scrollback_pos = grid.display_offset();
+        let scrollback_total = term_guard.total_lines(); // Safe total lines count!
+
+        // Create size from grid dimensions
+        let grid_size = PtySize {
+            rows: grid_rows as u16,
+            cols: grid_cols as u16,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
 
         // Debug keyframe generation
         let non_empty_count = current_grid
@@ -1305,15 +1402,15 @@ impl PtySession {
             "Generated keyframe: {} total cells, {} non-empty, size {}x{}, cursor=({},{}), sample: '{}'",
             current_grid.len(),
             non_empty_count,
-            size.rows,
-            size.cols,
+            grid_size.rows,
+            grid_size.cols,
             cursor.0,
             cursor.1,
             sample_content.replace('\n', "\\n").replace('\r', "\\r")
         );
 
         GridUpdateMessage::Keyframe {
-            size: size.into(),
+            size: grid_size.into(),
             cells: current_grid.into_iter().collect(),
             cursor,
             cursor_visible: is_cursor_visible,
@@ -1323,18 +1420,51 @@ impl PtySession {
         }
     }
 
-    /// Convert VT100 color to terminal color
-    fn vt100_to_terminal_color(color: vt100::Color) -> Option<TerminalColor> {
+    /// Convert alacritty color to terminal color
+    fn alacritty_to_terminal_color(
+        color: alacritty_terminal::vte::ansi::Color,
+    ) -> Option<TerminalColor> {
+        use alacritty_terminal::vte::ansi::{Color as AnsiColor, NamedColor};
+
         match color {
-            vt100::Color::Default => None,
-            vt100::Color::Idx(idx) => {
+            AnsiColor::Named(NamedColor::Foreground) | AnsiColor::Named(NamedColor::Background) => {
+                None
+            }
+            AnsiColor::Named(named) => {
+                // Convert named colors to indexed colors
+                let idx = match named {
+                    NamedColor::Black => 0,
+                    NamedColor::Red => 1,
+                    NamedColor::Green => 2,
+                    NamedColor::Yellow => 3,
+                    NamedColor::Blue => 4,
+                    NamedColor::Magenta => 5,
+                    NamedColor::Cyan => 6,
+                    NamedColor::White => 7,
+                    NamedColor::BrightBlack => 8,
+                    NamedColor::BrightRed => 9,
+                    NamedColor::BrightGreen => 10,
+                    NamedColor::BrightYellow => 11,
+                    NamedColor::BrightBlue => 12,
+                    NamedColor::BrightMagenta => 13,
+                    NamedColor::BrightCyan => 14,
+                    NamedColor::BrightWhite => 15,
+                    _ => return None,
+                };
+                Some(TerminalColor::Indexed(idx))
+            }
+            AnsiColor::Spec(rgb) => Some(TerminalColor::Rgb {
+                r: rgb.r,
+                g: rgb.g,
+                b: rgb.b,
+            }),
+            AnsiColor::Indexed(idx) => {
                 if idx <= 15 {
                     Some(TerminalColor::Indexed(idx))
                 } else {
                     Some(TerminalColor::Palette(idx))
                 }
             }
-            vt100::Color::Rgb(r, g, b) => Some(TerminalColor::Rgb { r, g, b }),
         }
     }
 

@@ -36,4 +36,3 @@ pub struct ProjectWithSessions {
     pub path: String,
     pub sessions: Vec<SessionInfo>,
 }
-

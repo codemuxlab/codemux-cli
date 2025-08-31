@@ -40,13 +40,15 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 open = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 tui-term = "0.1.11"
-vt100 = "0.15"
+alacritty_terminal = "0.25.0"
 rust-embed = { version = "8.5", features = ["debug-embed"] }
 mime_guess = "2.0"
 reqwest = { version = "0.12", features = ["json"] }
 url = "2.5"
 ts-rs = { version = "11.0", features = ["serde-compat"] }
 notify = "6.1"
+
+[dev-dependencies]
 
 # The profile that 'dist' will build with
 [profile.dist]

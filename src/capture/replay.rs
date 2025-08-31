@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::time::interval;
 
 use crate::capture::session_data::{GridCell, SessionEvent, SessionRecording};
-use vt100::Parser;
+use tui_term::vt100::Parser;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlaybackState {

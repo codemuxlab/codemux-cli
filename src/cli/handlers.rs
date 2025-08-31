@@ -6,8 +6,8 @@ use crate::client::{CodeMuxClient, SessionTui};
 use crate::server::{manager::SessionManagerHandle, start_web_server};
 use crate::utils::tui_writer::LogEntry;
 use crate::{Config, Result};
-use std::path::PathBuf;
 use std::env;
+use std::path::PathBuf;
 
 pub struct RunSessionParams {
     pub config: Config,
@@ -107,7 +107,7 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
     // For --continue, let the server handle finding the most recent session
     let (is_continuing, previous_session_id) = if continue_session {
         tracing::info!("🔄 Requesting server to continue most recent session");
-        (true, None)  // Server will find and provide the session ID
+        (true, None) // Server will find and provide the session ID
     } else if let Some(ref session_id_to_resume) = resume_session {
         tracing::info!(
             "🔄 Resuming from specified session: {}",

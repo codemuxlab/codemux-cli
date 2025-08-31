@@ -18,8 +18,8 @@ pub async fn analyze_jsonl_data(input_path: &Path, verbose: bool) -> Result<()> 
     }
 
     // Compare two VT100 processing approaches
-    let mut incremental_parser = vt100::Parser::new(30, 120, 0);
-    let mut batched_parser = vt100::Parser::new(30, 120, 0);
+    let mut incremental_parser = tui_term::vt100::Parser::new(30, 120, 0);
+    let mut batched_parser = tui_term::vt100::Parser::new(30, 120, 0);
     let mut batched_data = Vec::new();
 
     let mut event_count = 0;

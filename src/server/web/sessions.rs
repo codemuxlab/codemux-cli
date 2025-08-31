@@ -9,7 +9,9 @@ use axum::{
 use futures::stream::Stream;
 use std::convert::Infallible;
 
-use super::json_api::{json_api_response_with_headers, json_api_error_response_with_headers, JsonApiResource};
+use super::json_api::{
+    json_api_error_response_with_headers, json_api_response_with_headers, JsonApiResource,
+};
 use super::types::{AppState, CreateSessionRequest};
 use crate::core::session::SessionInfo;
 use std::path::PathBuf;
@@ -20,22 +22,22 @@ use tokio::fs;
 async fn find_most_recent_jsonl() -> Result<Option<String>, std::io::Error> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let claude_projects_path = PathBuf::from(&home).join(".claude").join("projects");
-    
+
     if !claude_projects_path.exists() {
         return Ok(None);
     }
-    
+
     let mut most_recent: Option<(SystemTime, String)> = None;
     let mut entries = fs::read_dir(&claude_projects_path).await?;
-    
+
     while let Some(project_dir) = entries.next_entry().await? {
         if !project_dir.file_type().await?.is_dir() {
             continue;
         }
-        
+
         let project_path = project_dir.path();
         let mut project_entries = fs::read_dir(&project_path).await?;
-        
+
         while let Some(entry) = project_entries.next_entry().await? {
             let file_path = entry.path();
             if file_path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
@@ -46,7 +48,7 @@ async fn find_most_recent_jsonl() -> Result<Option<String>, std::io::Error> {
                             .and_then(|s| s.to_str())
                             .unwrap_or("unknown")
                             .to_string();
-                        
+
                         if most_recent.is_none() || modified > most_recent.as_ref().unwrap().0 {
                             most_recent = Some((modified, session_id));
                         }
@@ -55,7 +57,7 @@ async fn find_most_recent_jsonl() -> Result<Option<String>, std::io::Error> {
             }
         }
     }
-    
+
     Ok(most_recent.map(|(_, session_id)| session_id))
 }
 
@@ -68,15 +70,15 @@ pub async fn create_session(
         req.agent,
         req.args
     );
-    
+
     // Handle --continue flag for Claude agent
     if req.agent.to_lowercase() == "claude" {
         if let Some(continue_idx) = req.args.iter().position(|arg| arg == "--continue") {
             tracing::info!("Server: Processing --continue flag for Claude");
-            
+
             // Remove --continue from args
             req.args.remove(continue_idx);
-            
+
             // Find the most recent JSONL session
             match find_most_recent_jsonl().await {
                 Ok(Some(session_id)) => {
@@ -86,15 +88,20 @@ pub async fn create_session(
                     req.args.push(session_id);
                 }
                 Ok(None) => {
-                    tracing::info!("Server: No previous JSONL sessions found, starting new session");
+                    tracing::info!(
+                        "Server: No previous JSONL sessions found, starting new session"
+                    );
                 }
                 Err(e) => {
-                    tracing::warn!("Server: Error finding recent JSONL: {}, starting new session", e);
+                    tracing::warn!(
+                        "Server: Error finding recent JSONL: {}, starting new session",
+                        e
+                    );
                 }
             }
         }
     }
-    
+
     match state
         .session_manager
         .create_session_with_path(req.agent, req.args, req.project_id, req.path)
