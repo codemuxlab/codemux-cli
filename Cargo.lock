@@ -2941,6 +2941,7 @@ dependencies = [
 [[package]]
 name = "vt100"
 version = "0.16.2"
+source = "git+https://github.com/codemuxlab/codemux-vt100.git#7cdb01a635ea4cc988e1aa85fe8cc1f4e623a66c"
 dependencies = [
  "itoa",
  "unicode-width 0.2.1",

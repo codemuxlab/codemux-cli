@@ -40,7 +40,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 open = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
 tui-term = "0.1.11"
-vt100 = { path = "vt100" }
+vt100 = { git = "https://github.com/codemuxlab/codemux-vt100.git" }
 rust-embed = { version = "8.5", features = ["debug-embed"] }
 mime_guess = "2.0"
 reqwest = { version = "0.12", features = ["json"] }
