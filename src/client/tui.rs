@@ -1,7 +1,7 @@
 use crate::core::pty_session::GridCell as PtyGridCell;
 use crate::core::pty_session::{
-    GridUpdateMessage, PtyChannels, PtyControlMessage, PtyInput, PtyInputMessage, ScrollDirection,
-    TerminalColor,
+    ConnectionStatus as PtyConnectionStatus, GridUpdateMessage, PtyChannels, PtyControlMessage, 
+    PtyInput, PtyInputMessage, ScrollDirection, TerminalColor,
 };
 use crate::utils::tui_writer::{LogEntry, LogLevel};
 use anyhow::Result;
@@ -147,6 +147,9 @@ pub struct SessionTui {
     last_render_time: std::time::Instant,
     // Session ID for generating URLs
     session_id: String,
+    // Connection state tracking
+    connection_status: PtyConnectionStatus,
+    last_connection_attempt: Option<Instant>,
 }
 
 pub struct SessionInfo {
@@ -181,6 +184,8 @@ impl SessionTui {
             cursor_dirty: false,
             last_render_time: std::time::Instant::now(),
             session_id,
+            connection_status: PtyConnectionStatus::Disconnected,
+            last_connection_attempt: None,
         })
     }
 
@@ -214,7 +219,11 @@ impl SessionTui {
     pub async fn connect_websocket(&mut self) -> Result<()> {
         use crate::client::http::CodeMuxClient;
 
-        // Create client and connect to WebSocket
+        self.last_connection_attempt = Some(Instant::now());
+        
+        tracing::info!("Connecting to WebSocket for session {}", self.session_id);
+
+        // Create client and connect to WebSocket (this now includes auto-reconnection)
         let client = CodeMuxClient::new("http://localhost:8765".to_string());
         let session_connection = client.connect_to_session(&self.session_id).await?;
 
@@ -223,7 +232,9 @@ impl SessionTui {
 
         // Store the channels
         self.set_pty_channels(pty_channels);
+        // Connection status will be updated via the connection_status channel
 
+        tracing::info!("WebSocket connected for session {}", self.session_id);
         Ok(())
     }
 
@@ -231,6 +242,7 @@ impl SessionTui {
         // Dropping pty_channels will close the WebSocket connection
         self.pty_channels = None;
         self.has_received_keyframe = false; // Reset keyframe state
+        self.connection_status = PtyConnectionStatus::Disconnected;
         self.status_message =
             "WebSocket disconnected - Press Ctrl+T for interactive mode".to_string();
     }
@@ -683,8 +695,8 @@ impl SessionTui {
             }
         }
 
-        // Clone grid_tx for receiving updates - server will automatically send keyframe
-        let grid_tx = {
+        // Clone grid_tx and connection_status_tx for receiving updates - server will automatically send keyframe
+        let (grid_tx, connection_status_tx) = {
             let channels = match self.get_pty_channels() {
                 Ok(channels) => channels,
                 Err(e) => {
@@ -693,12 +705,13 @@ impl SessionTui {
                 }
             };
 
-            channels.grid_tx.clone()
+            (channels.grid_tx.clone(), channels.connection_status_tx.clone())
         };
 
         tracing::debug!("Keyframe handling complete, setting up interactive mode");
         let mut event_stream = EventStream::new();
         let mut grid_update_stream = grid_tx.subscribe();
+        let mut connection_status_stream = connection_status_tx.subscribe();
 
         // Add a periodic timer to keep the display updated
         use tokio::time::interval;
@@ -745,6 +758,13 @@ impl SessionTui {
                     let uptime = self.start_time.elapsed();
                     tracing::trace!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs());
                     self.draw(session_info, uptime)?;
+                }
+                
+                // Handle connection status updates
+                Ok(status) = connection_status_stream.recv() => {
+                    tracing::debug!("Connection status updated: {:?}", status);
+                    self.connection_status = status;
+                    self.needs_redraw = true;
                 }
 
                 // Handle keyboard events from async stream (prioritize user input)
@@ -889,6 +909,7 @@ impl SessionTui {
             terminal_size.width,
         );
         let system_logs = self.system_logs.clone();
+        let connection_status = self.connection_status.clone();
 
         self.terminal.draw(move |f| {
             let size = f.area();
@@ -971,7 +992,7 @@ impl SessionTui {
                 // Session information
                 draw_session_info(f, content_chunks[0], session_info);
                 // Status section
-                draw_status(f, content_chunks[1], uptime, interactive_mode);
+                draw_status(f, content_chunks[1], uptime, interactive_mode, &connection_status);
                 // System logs section
                 draw_system_logs(f, content_chunks[2], &system_logs);
                 // Instructions
@@ -1257,7 +1278,7 @@ fn draw_session_info(f: &mut Frame, area: Rect, session_info: &SessionInfo) {
     f.render_widget(info_paragraph, area);
 }
 
-fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bool) {
+fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bool, connection_status: &PtyConnectionStatus) {
     let status_block = Block::default()
         .title("⚡ Status")
         .borders(Borders::ALL)
@@ -1281,7 +1302,28 @@ fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bo
         )
     };
 
-    let status_lines = vec![
+    let connection_span = match connection_status {
+        PtyConnectionStatus::Connected => Span::styled(
+            "🟢 Connected",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        PtyConnectionStatus::Disconnected => Span::styled(
+            "🔴 Disconnected",
+            Style::default()
+                .fg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ),
+        PtyConnectionStatus::Reconnecting { attempt, max_attempts } => Span::styled(
+            format!("🟡 Reconnecting ({}/{})", attempt, max_attempts),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let mut status_lines = vec![
         Line::from(vec![
             Span::styled(
                 "Status: ",
@@ -1307,14 +1349,27 @@ fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bo
         ]),
         Line::from(vec![
             Span::styled(
+                "Connection: ",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            connection_span,
+        ]),
+    ];
+    
+    // Only show uptime if we have space (at least 4 lines in area)
+    if area.height >= 6 {
+        status_lines.push(Line::from(vec![
+            Span::styled(
                 "Uptime: ",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(uptime_str),
-        ]),
-    ];
+        ]));
+    }
 
     let status_paragraph = Paragraph::new(status_lines).block(status_block);
 

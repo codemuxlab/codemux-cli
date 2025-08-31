@@ -17,6 +17,33 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
 
+/// Check if a specific session ID exists in ~/.claude/projects
+async fn session_exists(session_id: &str) -> Result<bool, std::io::Error> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let claude_projects_path = PathBuf::from(&home).join(".claude").join("projects");
+
+    if !claude_projects_path.exists() {
+        return Ok(false);
+    }
+
+    let mut entries = fs::read_dir(&claude_projects_path).await?;
+
+    while let Some(project_dir) = entries.next_entry().await? {
+        if !project_dir.file_type().await?.is_dir() {
+            continue;
+        }
+
+        let project_path = project_dir.path();
+        let session_file = project_path.join(format!("{}.jsonl", session_id));
+        
+        if session_file.exists() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
 /// Find the most recent JSONL file in ~/.claude/projects
 async fn find_most_recent_jsonl() -> Result<Option<String>, std::io::Error> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
@@ -71,7 +98,7 @@ pub async fn create_session(
     );
 
     // Handle --continue flag for Claude agent
-    if req.agent.to_lowercase() == "claude" {
+    let resume_session_id = if req.agent.to_lowercase() == "claude" {
         if let Some(continue_idx) = req.args.iter().position(|arg| arg == "--continue") {
             tracing::info!("Server: Processing --continue flag for Claude");
 
@@ -84,26 +111,69 @@ pub async fn create_session(
                     tracing::info!("Server: Found most recent session: {}", session_id);
                     // Replace with --resume <session_id>
                     req.args.push("--resume".to_string());
-                    req.args.push(session_id);
+                    req.args.push(session_id.clone());
+                    Some(session_id)
                 }
                 Ok(None) => {
                     tracing::info!(
                         "Server: No previous JSONL sessions found, starting new session"
                     );
+                    None
                 }
                 Err(e) => {
                     tracing::warn!(
                         "Server: Error finding recent JSONL: {}, starting new session",
                         e
                     );
+                    None
                 }
             }
+        } else if let Some(resume_idx) = req.args.iter().position(|arg| arg == "--resume") {
+            // Handle explicit --resume flag
+            if let Some(session_id) = req.args.get(resume_idx + 1) {
+                tracing::info!("Server: Processing --resume flag with session: {}", session_id);
+                
+                // Validate that the session exists
+                match session_exists(session_id).await {
+                    Ok(true) => {
+                        tracing::info!("Server: Session {} exists, proceeding with resume", session_id);
+                        Some(session_id.clone())
+                    }
+                    Ok(false) => {
+                        tracing::warn!("Server: Session {} does not exist", session_id);
+                        return json_api_error_response_with_headers(
+                            axum::http::StatusCode::NOT_FOUND,
+                            "Session Not Found".to_string(),
+                            format!(
+                                "Session '{}' does not exist. Use --continue to resume the most recent session, \
+                                or check available sessions with 'codemux list'.",
+                                session_id
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Server: Error checking if session exists: {}", e);
+                        return json_api_error_response_with_headers(
+                            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                            "Session Validation Failed".to_string(),
+                            "Unable to validate session existence".to_string(),
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!("Server: --resume flag found but no session ID provided");
+                None
+            }
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     match state
         .session_manager
-        .create_session_with_path(req.agent, req.args, req.project_id, req.path)
+        .create_session_with_path(req.agent, req.args, req.project_id, req.path, resume_session_id)
         .await
     {
         Ok(info) => {

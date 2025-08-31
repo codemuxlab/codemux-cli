@@ -103,6 +103,20 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
         anyhow::bail!("Cannot use both --continue and --resume flags together. Use --continue to resume the most recent session or --resume <session_id> to resume a specific session.");
     }
 
+    // Validate that --continue doesn't have extra arguments that look like session IDs
+    if continue_session && !args.is_empty() {
+        // Check if the first argument looks like a session ID (UUID format)
+        if let Some(first_arg) = args.first() {
+            if first_arg.len() == 36 && first_arg.chars().filter(|&c| c == '-').count() == 4 {
+                anyhow::bail!(
+                    "The --continue flag doesn't accept a session ID parameter. Did you mean to use --resume {}? \
+                    Use --continue to automatically resume the most recent session, or --resume <session_id> to resume a specific session.",
+                    first_arg
+                );
+            }
+        }
+    }
+
     // Determine if we're continuing a previous session
     // For --continue, let the server handle finding the most recent session
     let (is_continuing, previous_session_id) = if continue_session {

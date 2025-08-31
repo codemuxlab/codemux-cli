@@ -12,6 +12,12 @@ use crate::core::{
 use crate::core::{ProjectResource, SessionResource};
 use crate::server::claude_cache::{CacheEvent, ClaudeProjectsCache};
 
+// Cleanup messages for session lifecycle management
+#[derive(Debug)]
+pub enum SessionCleanupMessage {
+    SessionCompleted { session_id: String },
+}
+
 // Commands that can be sent to the SessionManager actor
 pub enum SessionCommand {
     CreateSession {
@@ -19,6 +25,7 @@ pub enum SessionCommand {
         args: Vec<String>,
         project_id: Option<String>,
         path: Option<String>,
+        resume_session_id: Option<String>,
         response_tx: oneshot::Sender<Result<SessionResource>>,
     },
     GetSession {
@@ -72,6 +79,8 @@ struct SessionManagerActor {
     sessions: HashMap<String, SessionState>,
     projects: HashMap<String, Project>,
     command_rx: mpsc::UnboundedReceiver<SessionCommand>,
+    cleanup_rx: mpsc::UnboundedReceiver<SessionCleanupMessage>,
+    cleanup_tx: mpsc::UnboundedSender<SessionCleanupMessage>,
     claude_cache: Option<ClaudeProjectsCache>,
 }
 
@@ -91,12 +100,15 @@ struct Project {
 impl SessionManagerHandle {
     pub fn new(config: Config) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let (cleanup_tx, cleanup_rx) = mpsc::unbounded_channel();
 
         let actor = SessionManagerActor {
             config,
             sessions: HashMap::new(),
             projects: HashMap::new(),
             command_rx,
+            cleanup_rx,
+            cleanup_tx: cleanup_tx.clone(),
             claude_cache: None, // Will be initialized in run()
         };
 
@@ -112,6 +124,7 @@ impl SessionManagerHandle {
         args: Vec<String>,
         project_id: Option<String>,
         path: Option<String>,
+        resume_session_id: Option<String>,
     ) -> Result<SessionResource> {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -120,6 +133,7 @@ impl SessionManagerHandle {
             args,
             project_id,
             path,
+            resume_session_id,
             response_tx,
         };
 
@@ -277,6 +291,10 @@ impl SessionManagerHandle {
 }
 
 impl SessionManagerActor {
+    fn create_cleanup_sender(&self) -> mpsc::UnboundedSender<SessionCleanupMessage> {
+        self.cleanup_tx.clone()
+    }
+    
     async fn run(mut self) {
         // Initialize the Claude projects cache
         match self.initialize_claude_cache().await {
@@ -284,9 +302,20 @@ impl SessionManagerActor {
             Err(e) => tracing::warn!("Failed to initialize Claude projects cache: {}", e),
         }
 
-        // Process commands
-        while let Some(command) = self.command_rx.recv().await {
-            self.handle_command(command).await;
+        // Process commands and cleanup messages
+        loop {
+            tokio::select! {
+                Some(command) = self.command_rx.recv() => {
+                    self.handle_command(command).await;
+                }
+                Some(cleanup_msg) = self.cleanup_rx.recv() => {
+                    self.handle_cleanup(cleanup_msg).await;
+                }
+                else => {
+                    tracing::info!("SessionManager shutting down");
+                    break;
+                }
+            }
         }
     }
 
@@ -374,6 +403,23 @@ impl SessionManagerActor {
         Ok(())
     }
 
+    async fn handle_cleanup(&mut self, cleanup_msg: SessionCleanupMessage) {
+        match cleanup_msg {
+            SessionCleanupMessage::SessionCompleted { session_id } => {
+                tracing::info!("Cleaning up completed session: {}", session_id);
+                if let Some(removed) = self.sessions.remove(&session_id) {
+                    tracing::info!(
+                        "Removed dead session {} (agent: {}) from session manager", 
+                        session_id, 
+                        removed.agent
+                    );
+                } else {
+                    tracing::warn!("Attempted to cleanup non-existent session: {}", session_id);
+                }
+            }
+        }
+    }
+
     async fn handle_command(&mut self, command: SessionCommand) {
         match command {
             SessionCommand::CreateSession {
@@ -381,10 +427,11 @@ impl SessionManagerActor {
                 args,
                 project_id,
                 path,
+                resume_session_id,
                 response_tx,
             } => {
                 let result = self
-                    .create_session_with_path(agent, args, project_id, path)
+                    .create_session_with_path(agent, args, project_id, path, resume_session_id)
                     .await;
                 let _ = response_tx.send(result);
             }
@@ -457,12 +504,14 @@ impl SessionManagerActor {
         args: Vec<String>,
         project_id: Option<String>,
         path: Option<String>,
+        resume_session_id: Option<String>,
     ) -> Result<SessionResource> {
         if !self.config.is_agent_allowed(&agent) {
             return Err(anyhow!("Code agent '{}' is not whitelisted", agent));
         }
 
-        let session_id = Uuid::new_v4().to_string();
+        // Use provided resume session ID or generate new one
+        let session_id = resume_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
         // Add session ID to args if the agent is Claude
         let mut final_args = args.clone();
@@ -535,6 +584,10 @@ impl SessionManagerActor {
         // Clone channels for storage
         let channels_clone = channels.clone();
 
+        // Create a cleanup handle for session management
+        let session_id_for_cleanup = session_id.clone();
+        let cleanup_tx = self.create_cleanup_sender();
+        
         // Spawn the PTY session start task to actually begin reading from the PTY
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
@@ -553,6 +606,13 @@ impl SessionManagerActor {
                 "SessionManager - PTY session {} completed",
                 session_id_clone
             );
+            
+            // Notify session manager to clean up this session
+            if let Err(e) = cleanup_tx.send(SessionCleanupMessage::SessionCompleted {
+                session_id: session_id_for_cleanup
+            }) {
+                tracing::warn!("Failed to send session cleanup notification: {}", e);
+            }
         });
 
         // Store the session state
@@ -635,31 +695,42 @@ impl SessionManagerActor {
         None
     }
 
-    fn get_session_channels(&self, session_id: &str) -> Option<PtyChannels> {
+    fn get_session_channels(&mut self, session_id: &str) -> Option<PtyChannels> {
         tracing::debug!(
             "SessionManager - Looking for session channels: {}, total sessions: {}",
             session_id,
             self.sessions.len()
         );
-        let result = self
-            .sessions
-            .get(session_id)
-            .map(|state| state.channels.clone());
-        if result.is_some() {
+        
+        // First check if the session exists
+        if let Some(state) = self.sessions.get(session_id) {
+            // Test if channels are still alive by trying to check if control channel is closed
+            if state.channels.control_tx.is_closed() {
+                tracing::warn!(
+                    "SessionManager - Session {} has dead channels, cleaning up",
+                    session_id
+                );
+                
+                // Remove the dead session
+                self.sessions.remove(session_id);
+                return None;
+            }
+            
             tracing::debug!(
-                "SessionManager - Found channels for session: {}",
+                "SessionManager - Found active channels for session: {}",
                 session_id
             );
-        } else {
-            tracing::warn!(
-                "SessionManager - No channels found for session: {}",
-                session_id
-            );
-            // Log all available session IDs for debugging
-            let session_ids: Vec<_> = self.sessions.keys().collect();
-            tracing::debug!("SessionManager - Available session IDs: {:?}", session_ids);
+            return Some(state.channels.clone());
         }
-        result
+        
+        tracing::warn!(
+            "SessionManager - No channels found for session: {}",
+            session_id
+        );
+        // Log all available session IDs for debugging
+        let session_ids: Vec<_> = self.sessions.keys().collect();
+        tracing::debug!("SessionManager - Available session IDs: {:?}", session_ids);
+        None
     }
 
     fn list_sessions(&self) -> Vec<SessionResource> {
@@ -757,12 +828,24 @@ impl SessionManagerActor {
 
         self.sessions.insert(session_id.clone(), session_state);
 
+        // Create cleanup handle for resumed session
+        let session_id_for_cleanup = session_id.clone();
+        let cleanup_tx = self.create_cleanup_sender();
+        
         // Spawn the PTY session start task
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
             tracing::info!("Starting resumed PTY session {}", session_id_clone);
             if let Err(e) = pty_session.start().await {
                 tracing::error!("Resumed PTY session {} failed: {}", session_id_clone, e);
+            }
+            tracing::info!("Resumed PTY session {} completed", session_id_clone);
+            
+            // Notify session manager to clean up this session
+            if let Err(e) = cleanup_tx.send(SessionCleanupMessage::SessionCompleted {
+                session_id: session_id_for_cleanup
+            }) {
+                tracing::warn!("Failed to send resumed session cleanup notification: {}", e);
             }
         });
 

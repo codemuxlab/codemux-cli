@@ -2,6 +2,7 @@ use anyhow::{anyhow, Result};
 use reqwest::Client;
 use serde::Serialize;
 use std::time::Duration;
+use tokio::time::sleep;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::core::pty_session::{GridUpdateMessage, PtyInputMessage};
@@ -27,6 +28,25 @@ pub struct CreateSessionRequest {
 pub struct CreateProjectRequest {
     pub name: String,
     pub path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReconnectionConfig {
+    pub max_attempts: u32,
+    pub base_delay_ms: u64,
+    pub max_delay_ms: u64,
+    pub backoff_factor: f64,
+}
+
+impl Default for ReconnectionConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 10,
+            base_delay_ms: 5000, // Start at 5 seconds
+            max_delay_ms: 30000, // Max 30 seconds
+            backoff_factor: 2.0, // Power of 2
+        }
+    }
 }
 
 
@@ -334,15 +354,73 @@ impl CodeMuxClient {
 
     /// Connect to a session via WebSocket
     pub async fn connect_to_session(&self, session_id: &str) -> Result<SessionConnection> {
+        let config = ReconnectionConfig::default();
+        self.connect_to_session_with_config(session_id, config).await
+    }
+
+    /// Connect to a session via WebSocket with custom reconnection configuration
+    pub async fn connect_to_session_with_config(
+        &self,
+        session_id: &str,
+        config: ReconnectionConfig,
+    ) -> Result<SessionConnection> {
         let ws_url = format!(
             "ws://localhost:{}/ws/{}",
             self.base_url.trim_start_matches("http://localhost:"),
             session_id
         );
 
-        let (ws_stream, _) = connect_async(&ws_url).await?;
+        // Try to connect with exponential backoff
+        for attempt in 0..=config.max_attempts {
+            match connect_async(&ws_url).await {
+                Ok((ws_stream, _)) => {
+                    tracing::info!(
+                        "WebSocket connected to session {} (attempt {})",
+                        session_id,
+                        attempt + 1
+                    );
+                    return Ok(SessionConnection::new(ws_stream, session_id.to_string()));
+                }
+                Err(e) => {
+                    if attempt < config.max_attempts {
+                        let delay_ms = (config.base_delay_ms as f64
+                            * config.backoff_factor.powi(attempt as i32))
+                            .min(config.max_delay_ms as f64) as u64;
+                        
+                        // Add jitter to prevent thundering herd
+                        let jitter = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis() % 1000) as u64;
+                        let delay_with_jitter = Duration::from_millis(delay_ms + jitter);
 
-        Ok(SessionConnection::new(ws_stream, session_id.to_string()))
+                        tracing::warn!(
+                            "WebSocket connection attempt {} failed: {}. Retrying in {:.1}s (attempt {}/{})",
+                            attempt + 1,
+                            e,
+                            delay_with_jitter.as_secs_f64(),
+                            attempt + 1,
+                            config.max_attempts
+                        );
+
+                        sleep(delay_with_jitter).await;
+                    } else {
+                        tracing::error!(
+                            "WebSocket connection failed after {} attempts: {}",
+                            config.max_attempts + 1,
+                            e
+                        );
+                        return Err(anyhow!(
+                            "Failed to connect to WebSocket after {} attempts: {}",
+                            config.max_attempts + 1,
+                            e
+                        ));
+                    }
+                }
+            }
+        }
+
+        unreachable!()
     }
 
     /// Get the web interface URL for a session
@@ -393,7 +471,7 @@ impl SessionConnection {
 
     /// Convert WebSocket connection into PTY-like channels for TUI
     pub fn into_pty_channels(self) -> crate::core::pty_session::PtyChannels {
-        use crate::core::pty_session::{PtyChannels, PtyControlMessage, PtyOutputMessage};
+        use crate::core::pty_session::{ConnectionStatus, PtyChannels, PtyControlMessage, PtyOutputMessage};
         use futures_util::{SinkExt, StreamExt};
 
         // Create channels for PTY communication
@@ -403,16 +481,85 @@ impl SessionConnection {
         let (control_tx, mut control_rx) =
             tokio::sync::mpsc::unbounded_channel::<PtyControlMessage>();
         let (size_tx, _size_rx) = tokio::sync::broadcast::channel::<portable_pty::PtySize>(10);
+        let (connection_status_tx, _connection_status_rx) = tokio::sync::broadcast::channel::<ConnectionStatus>(10);
 
-        let mut ws_stream = self.ws_stream;
+        let ws_stream = self.ws_stream;
         let session_id = self.session_id.clone();
 
         // Clone the broadcast senders for use in the spawn task
         let output_tx_clone = output_tx.clone();
         let grid_tx_clone = grid_tx.clone();
+        let connection_status_tx_clone = connection_status_tx.clone();
 
-        // Spawn task to handle WebSocket -> PTY channel forwarding
+        // Spawn task to handle WebSocket -> PTY channel forwarding with auto-reconnection
         tokio::spawn(async move {
+            let reconnect_config = ReconnectionConfig::default();
+            let mut current_ws = ws_stream;
+            let mut reconnect_attempt = 0u32;
+            let should_reconnect = true;
+            
+            // Send initial connected status
+            let _ = connection_status_tx_clone.send(ConnectionStatus::Connected);
+            
+            // Helper function to attempt reconnection
+            async fn attempt_reconnect(
+                attempt: u32,
+                session_id: &str,
+                reconnect_config: &ReconnectionConfig,
+                status_tx: &tokio::sync::broadcast::Sender<ConnectionStatus>,
+            ) -> Option<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+                if attempt >= reconnect_config.max_attempts {
+                    tracing::error!("Max reconnection attempts reached for session {}", session_id);
+                    let _ = status_tx.send(ConnectionStatus::Disconnected);
+                    return None;
+                }
+
+                // Send reconnecting status
+                let _ = status_tx.send(ConnectionStatus::Reconnecting { 
+                    attempt: attempt + 1, 
+                    max_attempts: reconnect_config.max_attempts 
+                });
+
+                let delay_ms = (reconnect_config.base_delay_ms as f64
+                    * reconnect_config.backoff_factor.powi(attempt as i32))
+                    .min(reconnect_config.max_delay_ms as f64) as u64;
+                
+                // Add jitter to prevent thundering herd
+                let jitter = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() % 1000) as u64;
+                let delay_with_jitter = Duration::from_millis(delay_ms + jitter);
+
+                tracing::warn!(
+                    "WebSocket disconnected for session {}. Reconnecting in {:.1}s (attempt {}/{})",
+                    session_id,
+                    delay_with_jitter.as_secs_f64(),
+                    attempt + 1,
+                    reconnect_config.max_attempts
+                );
+
+                sleep(delay_with_jitter).await;
+
+                let ws_url = format!("ws://localhost:8765/ws/{}", session_id);
+                match connect_async(&ws_url).await {
+                    Ok((new_ws, _)) => {
+                        tracing::info!("WebSocket reconnected to session {} (attempt {})", session_id, attempt + 1);
+                        let _ = status_tx.send(ConnectionStatus::Connected);
+                        Some(new_ws)
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Reconnection attempt {} failed for session {}: {}",
+                            attempt + 1,
+                            session_id,
+                            e
+                        );
+                        None
+                    }
+                }
+            }
+            
             loop {
                 tokio::select! {
                     // Handle input from TUI -> WebSocket
@@ -432,9 +579,26 @@ impl SessionConnection {
 
                         if let Ok(json) = serde_json::to_string(&client_msg) {
                             tracing::trace!("Client WebSocket sending input: {} chars", json.len());
-                            if ws_stream.send(Message::Text(json)).await.is_err() {
-                                tracing::error!("Failed to send input via client WebSocket");
-                                break;
+                            if current_ws.send(Message::Text(json)).await.is_err() {
+                                tracing::error!("Failed to send input via client WebSocket - connection lost");
+                                // Trigger reconnection
+                                if should_reconnect {
+                                    if let Some(new_ws) = attempt_reconnect(reconnect_attempt, &session_id, &reconnect_config, &connection_status_tx_clone).await {
+                                        current_ws = new_ws;
+                                        reconnect_attempt = 0; // Reset counter on successful reconnection
+                                        continue;
+                                    } else {
+                                        reconnect_attempt += 1;
+                                        if reconnect_attempt >= reconnect_config.max_attempts {
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
+                            } else {
+                                // Reset reconnection attempt counter on successful send
+                                reconnect_attempt = 0;
                             }
                         }
                     }
@@ -445,8 +609,24 @@ impl SessionConnection {
                             PtyControlMessage::Resize { rows, cols } => {
                                 let client_msg = ClientMessage::Resize { rows, cols };
                                 if let Ok(json) = serde_json::to_string(&client_msg) {
-                                    if ws_stream.send(Message::Text(json)).await.is_err() {
-                                        break;
+                                    if current_ws.send(Message::Text(json)).await.is_err() {
+                                        // Trigger reconnection on control message failure
+                                        if should_reconnect {
+                                            if let Some(new_ws) = attempt_reconnect(reconnect_attempt, &session_id, &reconnect_config, &connection_status_tx_clone).await {
+                                                current_ws = new_ws;
+                                                reconnect_attempt = 0;
+                                                continue;
+                                            } else {
+                                                reconnect_attempt += 1;
+                                                if reconnect_attempt >= reconnect_config.max_attempts {
+                                                    break;
+                                                }
+                                            }
+                                        } else {
+                                            break;
+                                        }
+                                    } else {
+                                        reconnect_attempt = 0;
                                     }
                                 }
                             }
@@ -457,14 +637,14 @@ impl SessionConnection {
                             }
                             PtyControlMessage::Terminate => {
                                 // Send close message and break
-                                let _ = ws_stream.close(None).await;
+                                let _ = current_ws.close(None).await;
                                 break;
                             }
                         }
                     }
 
                     // Handle messages from WebSocket -> PTY channels
-                    msg = ws_stream.next() => {
+                    msg = current_ws.next() => {
                         match msg {
                             Some(Ok(Message::Text(text))) => {
                                 tracing::trace!("Client WebSocket received message: {} chars", text.len());
@@ -490,14 +670,48 @@ impl SessionConnection {
                                 } else {
                                     tracing::warn!("Failed to parse WebSocket message: {}", text);
                                 }
+                                // Reset reconnection counter on successful message receive
+                                reconnect_attempt = 0;
                             }
                             Some(Ok(Message::Close(_))) | None => {
                                 tracing::info!("WebSocket connection closed for session {}", session_id);
-                                break;
+                                // Attempt to reconnect unless explicitly terminated
+                                if should_reconnect {
+                                    if let Some(new_ws) = attempt_reconnect(reconnect_attempt, &session_id, &reconnect_config, &connection_status_tx_clone).await {
+                                        current_ws = new_ws;
+                                        reconnect_attempt = 0;
+                                        tracing::info!("Successfully reconnected to session {}", session_id);
+                                        continue;
+                                    } else {
+                                        reconnect_attempt += 1;
+                                        if reconnect_attempt >= reconnect_config.max_attempts {
+                                            tracing::error!("Max reconnection attempts reached, giving up on session {}", session_id);
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
                             }
                             Some(Err(e)) => {
-                                tracing::error!("WebSocket error: {}", e);
-                                break;
+                                tracing::error!("WebSocket error for session {}: {}", session_id, e);
+                                // Attempt to reconnect on error
+                                if should_reconnect {
+                                    if let Some(new_ws) = attempt_reconnect(reconnect_attempt, &session_id, &reconnect_config, &connection_status_tx_clone).await {
+                                        current_ws = new_ws;
+                                        reconnect_attempt = 0;
+                                        tracing::info!("Successfully reconnected after error to session {}", session_id);
+                                        continue;
+                                    } else {
+                                        reconnect_attempt += 1;
+                                        if reconnect_attempt >= reconnect_config.max_attempts {
+                                            tracing::error!("Max reconnection attempts reached after error, giving up on session {}", session_id);
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    break;
+                                }
                             }
                             _ => {} // Ignore other message types
                         }
@@ -512,6 +726,7 @@ impl SessionConnection {
             control_tx,
             size_tx,
             grid_tx,
+            connection_status_tx,
         }
     }
 

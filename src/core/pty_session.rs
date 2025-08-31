@@ -12,6 +12,14 @@ use ts_rs::TS;
 pub const DEFAULT_PTY_COLS: u16 = 80;
 pub const DEFAULT_PTY_ROWS: u16 = 30;
 
+/// Connection status for WebSocket clients
+#[derive(Debug, Clone)]
+pub enum ConnectionStatus {
+    Connected,
+    Disconnected,
+    Reconnecting { attempt: u32, max_attempts: u32 },
+}
+
 /// Messages that can be sent to control the PTY session
 #[derive(Debug)]
 pub enum PtyControlMessage {
@@ -249,6 +257,7 @@ pub struct PtyChannels {
     pub control_tx: mpsc::UnboundedSender<PtyControlMessage>,
     pub size_tx: broadcast::Sender<PtySize>,
     pub grid_tx: broadcast::Sender<GridUpdateMessage>,
+    pub connection_status_tx: broadcast::Sender<ConnectionStatus>,
 }
 
 impl PtyChannels {
@@ -380,6 +389,7 @@ impl PtySession {
         let (control_tx, control_rx) = mpsc::unbounded_channel();
         let (size_tx, _) = broadcast::channel(100);
         let (grid_tx, _) = broadcast::channel(1000);
+        let (connection_status_tx, _) = broadcast::channel(10);
 
         // Create client channel interface
         let channels = PtyChannels {
@@ -388,6 +398,7 @@ impl PtySession {
             control_tx,
             size_tx: size_tx.clone(),
             grid_tx: grid_tx.clone(),
+            connection_status_tx: connection_status_tx.clone(),
         };
 
         let session = PtySession {
