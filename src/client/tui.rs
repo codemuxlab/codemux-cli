@@ -1,6 +1,6 @@
 use crate::core::pty_session::GridCell as PtyGridCell;
 use crate::core::pty_session::{
-    ConnectionStatus as PtyConnectionStatus, GridUpdateMessage, PtyChannels, PtyControlMessage, 
+    ConnectionStatus as PtyConnectionStatus, GridUpdateMessage, PtyChannels, PtyControlMessage,
     PtyInput, PtyInputMessage, ScrollDirection, TerminalColor,
 };
 use crate::utils::tui_writer::{LogEntry, LogLevel};
@@ -220,7 +220,7 @@ impl SessionTui {
         use crate::client::http::CodeMuxClient;
 
         self.last_connection_attempt = Some(Instant::now());
-        
+
         tracing::info!("Connecting to WebSocket for session {}", self.session_id);
 
         // Create client and connect to WebSocket (this now includes auto-reconnection)
@@ -705,7 +705,10 @@ impl SessionTui {
                 }
             };
 
-            (channels.grid_tx.clone(), channels.connection_status_tx.clone())
+            (
+                channels.grid_tx.clone(),
+                channels.connection_status_tx.clone(),
+            )
         };
 
         tracing::debug!("Keyframe handling complete, setting up interactive mode");
@@ -759,7 +762,7 @@ impl SessionTui {
                     tracing::trace!("Interactive mode heartbeat - uptime: {}s", uptime.as_secs());
                     self.draw(session_info, uptime)?;
                 }
-                
+
                 // Handle connection status updates
                 Ok(status) = connection_status_stream.recv() => {
                     tracing::debug!("Connection status updated: {:?}", status);
@@ -958,7 +961,7 @@ impl SessionTui {
                     .block(Block::default().borders(Borders::NONE));
                     // No wrapping - each line should be rendered exactly as provided
                 f.render_widget(terminal_widget, terminal_area);
-                
+
                 // Draw disconnection overlay if not connected
                 // Use the full screen size for proper centering
                 if !matches!(connection_status, PtyConnectionStatus::Connected) {
@@ -1010,11 +1013,6 @@ impl SessionTui {
                     .alignment(Alignment::Center)
                     .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Gray)));
                 f.render_widget(footer, chunks[2]);
-                
-                // Draw disconnection overlay if not connected (for monitoring mode too)
-                if !matches!(connection_status, PtyConnectionStatus::Connected) {
-                    draw_connection_overlay(f, f.area(), &connection_status);
-                }
             }
         })?;
 
@@ -1289,7 +1287,13 @@ fn draw_session_info(f: &mut Frame, area: Rect, session_info: &SessionInfo) {
     f.render_widget(info_paragraph, area);
 }
 
-fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bool, connection_status: &PtyConnectionStatus) {
+fn draw_status(
+    f: &mut Frame,
+    area: Rect,
+    uptime: Duration,
+    interactive_mode: bool,
+    connection_status: &PtyConnectionStatus,
+) {
     let status_block = Block::default()
         .title("⚡ Status")
         .borders(Borders::ALL)
@@ -1322,11 +1326,12 @@ fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bo
         ),
         PtyConnectionStatus::Disconnected => Span::styled(
             "🔴 Disconnected",
-            Style::default()
-                .fg(Color::Red)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ),
-        PtyConnectionStatus::Reconnecting { attempt, max_attempts } => Span::styled(
+        PtyConnectionStatus::Reconnecting {
+            attempt,
+            max_attempts,
+        } => Span::styled(
             format!("🟡 Reconnecting ({}/{})", attempt, max_attempts),
             Style::default()
                 .fg(Color::Yellow)
@@ -1368,7 +1373,7 @@ fn draw_status(f: &mut Frame, area: Rect, uptime: Duration, interactive_mode: bo
             connection_span,
         ]),
     ];
-    
+
     // Only show uptime if we have space (at least 4 lines in area)
     if area.height >= 6 {
         status_lines.push(Line::from(vec![
@@ -1490,75 +1495,85 @@ fn format_duration(duration: Duration) -> String {
 
 fn draw_connection_overlay(f: &mut Frame, area: Rect, connection_status: &PtyConnectionStatus) {
     use ratatui::widgets::Clear;
-    
+
     // Calculate center position for overlay
     let overlay_width = 50;
     let overlay_height = 7;
-    
+
     // Ensure we don't overflow the screen
     let overlay_width = overlay_width.min(area.width);
     let overlay_height = overlay_height.min(area.height);
-    
+
     let overlay_x = area.width.saturating_sub(overlay_width) / 2;
     let overlay_y = area.height.saturating_sub(overlay_height) / 2;
-    
+
     let overlay_area = Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
-    
+
     // Determine style and content based on connection status
     let (title, message, style) = match connection_status {
         PtyConnectionStatus::Disconnected => (
             " ⚠️  DISCONNECTED ",
             vec![
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("WebSocket connection lost", Style::default().fg(Color::White))
-                ]),
+                Line::from(vec![Span::styled(
+                    "WebSocket connection lost",
+                    Style::default().fg(Color::White),
+                )]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("Attempting to reconnect...", Style::default().fg(Color::Gray))
-                ]),
+                Line::from(vec![Span::styled(
+                    "Attempting to reconnect...",
+                    Style::default().fg(Color::Gray),
+                )]),
             ],
-            Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD)
+            Style::default()
+                .bg(Color::Red)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
-        PtyConnectionStatus::Reconnecting { attempt, max_attempts } => (
+        PtyConnectionStatus::Reconnecting {
+            attempt,
+            max_attempts,
+        } => (
             " 🔄 RECONNECTING ",
             vec![
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled(
-                        format!("Reconnection attempt {} of {}", attempt, max_attempts),
-                        Style::default().fg(Color::White)
-                    )
-                ]),
+                Line::from(vec![Span::styled(
+                    format!("Reconnection attempt {} of {}", attempt, max_attempts),
+                    Style::default().fg(Color::White),
+                )]),
                 Line::from(""),
-                Line::from(vec![
-                    Span::styled("Please wait...", Style::default().fg(Color::Gray))
-                ]),
+                Line::from(vec![Span::styled(
+                    "Please wait...",
+                    Style::default().fg(Color::Gray),
+                )]),
             ],
-            Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)
+            Style::default()
+                .bg(Color::Yellow)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
         ),
         PtyConnectionStatus::Connected => {
             // This shouldn't happen as we only show overlay when not connected
             return;
         }
     };
-    
+
     // Create the overlay block with a clear background
     let overlay_block = Block::default()
         .title(title)
         .borders(Borders::ALL)
         .border_style(style)
         .style(Style::default().bg(Color::Black));
-    
+
     // Create the content paragraph
     let overlay_content = Paragraph::new(message)
         .block(overlay_block)
         .alignment(Alignment::Center)
         .style(Style::default().fg(Color::White));
-    
+
     // Clear the area behind the overlay first (optional, for better visibility)
     f.render_widget(Clear, overlay_area);
-    
+
     // Render the overlay
     f.render_widget(overlay_content, overlay_area);
 }

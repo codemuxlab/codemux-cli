@@ -2,10 +2,8 @@ use axum::{extract::State, response::IntoResponse, Json};
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
-use crate::core::{
-    json_api_error_response_with_headers, json_api_response_with_headers,
-};
 use super::types::{AddProjectRequest, AppState};
+use crate::core::{json_api_error_response_with_headers, json_api_response_with_headers};
 
 pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
     // Return actual projects with their sessions
@@ -37,21 +35,31 @@ pub async fn list_projects(State(state): State<AppState>) -> impl IntoResponse {
                 .session_manager
                 .get_recent_project_sessions(project_path)
                 .await;
-            
+
             // Add recent sessions to relationships
             let mut all_sessions = project_sessions;
-            all_sessions.extend(recent_sessions.into_iter().map(|session| crate::core::json_api::SessionResourceTS {
-                resource_type: "session".to_string(),
-                id: session.id.clone(),
-                attributes: session.attributes.clone(),
+            all_sessions.extend(recent_sessions.into_iter().map(|session| {
+                crate::core::json_api::SessionResourceTS {
+                    resource_type: "session".to_string(),
+                    id: session.id.clone(),
+                    attributes: session.attributes.clone(),
+                }
             }));
 
             // Update relationships
             if let Some(ref mut relationships) = project.relationships {
-                relationships.recent_sessions = if all_sessions.is_empty() { None } else { Some(all_sessions) };
+                relationships.recent_sessions = if all_sessions.is_empty() {
+                    None
+                } else {
+                    Some(all_sessions)
+                };
             } else {
                 project.relationships = Some(crate::core::ProjectRelationships {
-                    recent_sessions: if all_sessions.is_empty() { None } else { Some(all_sessions) },
+                    recent_sessions: if all_sessions.is_empty() {
+                        None
+                    } else {
+                        Some(all_sessions)
+                    },
                 });
             }
         }
@@ -115,9 +123,7 @@ pub async fn add_project(
         .create_project(req.name, req.path)
         .await
     {
-        Ok(info) => {
-            json_api_response_with_headers(info)
-        }
+        Ok(info) => json_api_response_with_headers(info),
         Err(e) => json_api_error_response_with_headers(
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             "Project Creation Failed".to_string(),

@@ -294,7 +294,7 @@ impl SessionManagerActor {
     fn create_cleanup_sender(&self) -> mpsc::UnboundedSender<SessionCleanupMessage> {
         self.cleanup_tx.clone()
     }
-    
+
     async fn run(mut self) {
         // Initialize the Claude projects cache
         match self.initialize_claude_cache().await {
@@ -409,8 +409,8 @@ impl SessionManagerActor {
                 tracing::info!("Cleaning up completed session: {}", session_id);
                 if let Some(removed) = self.sessions.remove(&session_id) {
                     tracing::info!(
-                        "Removed dead session {} (agent: {}) from session manager", 
-                        session_id, 
+                        "Removed dead session {} (agent: {}) from session manager",
+                        session_id,
                         removed.agent
                     );
                 } else {
@@ -591,7 +591,7 @@ impl SessionManagerActor {
         // Create a cleanup handle for session management
         let session_id_for_cleanup = session_id.clone();
         let cleanup_tx = self.create_cleanup_sender();
-        
+
         // Spawn the PTY session start task to actually begin reading from the PTY
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
@@ -610,10 +610,10 @@ impl SessionManagerActor {
                 "SessionManager - PTY session {} completed",
                 session_id_clone
             );
-            
+
             // Notify session manager to clean up this session
             if let Err(e) = cleanup_tx.send(SessionCleanupMessage::SessionCompleted {
-                session_id: session_id_for_cleanup
+                session_id: session_id_for_cleanup,
             }) {
                 tracing::warn!("Failed to send session cleanup notification: {}", e);
             }
@@ -705,7 +705,7 @@ impl SessionManagerActor {
             session_id,
             self.sessions.len()
         );
-        
+
         // First check if the session exists
         if let Some(state) = self.sessions.get(session_id) {
             // Test if channels are still alive by trying to check if control channel is closed
@@ -714,19 +714,19 @@ impl SessionManagerActor {
                     "SessionManager - Session {} has dead channels, cleaning up",
                     session_id
                 );
-                
+
                 // Remove the dead session
                 self.sessions.remove(session_id);
                 return None;
             }
-            
+
             tracing::debug!(
                 "SessionManager - Found active channels for session: {}",
                 session_id
             );
             return Some(state.channels.clone());
         }
-        
+
         tracing::warn!(
             "SessionManager - No channels found for session: {}",
             session_id
@@ -835,7 +835,7 @@ impl SessionManagerActor {
         // Create cleanup handle for resumed session
         let session_id_for_cleanup = session_id.clone();
         let cleanup_tx = self.create_cleanup_sender();
-        
+
         // Spawn the PTY session start task
         let session_id_clone = session_id.clone();
         tokio::spawn(async move {
@@ -844,10 +844,10 @@ impl SessionManagerActor {
                 tracing::error!("Resumed PTY session {} failed: {}", session_id_clone, e);
             }
             tracing::info!("Resumed PTY session {} completed", session_id_clone);
-            
+
             // Notify session manager to clean up this session
             if let Err(e) = cleanup_tx.send(SessionCleanupMessage::SessionCompleted {
-                session_id: session_id_for_cleanup
+                session_id: session_id_for_cleanup,
             }) {
                 tracing::warn!("Failed to send resumed session cleanup notification: {}", e);
             }

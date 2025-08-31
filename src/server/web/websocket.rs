@@ -64,30 +64,34 @@ async fn handle_socket(
                         vec![], // Resume with empty args
                         attrs.project.clone(),
                     )
-                .await
-            {
-                Ok(_resumed_session) => {
-                    tracing::info!("WebSocket: Successfully resumed session {}", session_id);
-                    // Get the channels for the resumed session
-                    if let Some(channels) = state
-                        .session_manager
-                        .get_session_channels(&session_id)
-                        .await
-                    {
-                        channels
-                    } else {
+                    .await
+                {
+                    Ok(_resumed_session) => {
+                        tracing::info!("WebSocket: Successfully resumed session {}", session_id);
+                        // Get the channels for the resumed session
+                        if let Some(channels) = state
+                            .session_manager
+                            .get_session_channels(&session_id)
+                            .await
+                        {
+                            channels
+                        } else {
+                            tracing::error!(
+                                "WebSocket: Failed to get channels for resumed session {}",
+                                session_id
+                            );
+                            return;
+                        }
+                    }
+                    Err(e) => {
                         tracing::error!(
-                            "WebSocket: Failed to get channels for resumed session {}",
-                            session_id
+                            "WebSocket: Failed to resume session {}: {}",
+                            session_id,
+                            e
                         );
                         return;
                     }
                 }
-                Err(e) => {
-                    tracing::error!("WebSocket: Failed to resume session {}: {}", session_id, e);
-                    return;
-                }
-            }
             } else {
                 tracing::error!("WebSocket: Session {} missing attributes", session_id);
                 return;

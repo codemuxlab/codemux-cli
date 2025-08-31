@@ -109,7 +109,8 @@ pub fn json_api_error_response_with_headers(
 }
 
 // Type aliases for common JSON API resources
-pub type ProjectResource = JsonApiResource<crate::core::session::ProjectAttributes, ProjectRelationships>;
+pub type ProjectResource =
+    JsonApiResource<crate::core::session::ProjectAttributes, ProjectRelationships>;
 pub type SessionResource = JsonApiResource<crate::core::session::SessionAttributes, ()>;
 
 // TypeScript-exported versions for frontend

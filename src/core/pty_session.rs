@@ -53,7 +53,7 @@ impl ScrollThrottle {
             min_interval: std::time::Duration::from_millis(50), // 20 FPS max
         }
     }
-    
+
     fn should_update(&mut self) -> bool {
         let now = std::time::Instant::now();
         if now.duration_since(self.last_update) >= self.min_interval {
@@ -363,7 +363,7 @@ impl PtySession {
         for (key, value) in std::env::vars() {
             cmd.env(&key, &value);
         }
-        
+
         // Override specific environment variables for proper terminal behavior
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
@@ -784,14 +784,15 @@ impl PtySession {
                 match &msg.input {
                     PtyInput::Key { event, .. } => {
                         tracing::trace!("Processing key event: {:?}", event);
-                        
+
                         // Reset scroll position on any key press to return to current content
-                        if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll) {
+                        if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll)
+                        {
                             tracing::warn!("Failed to send scroll reset message: {}", e);
                         } else {
                             tracing::trace!("Sent scroll reset on key press");
                         }
-                        
+
                         let bytes = Self::key_event_to_bytes(event);
 
                         let mut writer_guard = input_writer.lock().await;
@@ -964,13 +965,13 @@ impl PtySession {
                             }
                             InternalControlMessage::ResetScroll => {
                                 tracing::trace!("Control task - Resetting scroll position on key press");
-                                
+
                                 // Reset scrollback to 0 (current content)
                                 {
                                     let mut parser_guard = control_vt_parser.lock().await;
                                     parser_guard.screen_mut().set_scrollback(0);
                                 }
-                                
+
                                 // Generate and send keyframe with reset scroll position
                                 let keyframe = Self::generate_keyframe(
                                     &control_vt_parser,

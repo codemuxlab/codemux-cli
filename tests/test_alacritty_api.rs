@@ -106,16 +106,16 @@ mod tests {
         // 6. ACTUAL ANSI ESCAPE SEQUENCE TESTING
         // ==========================================
         println!("\\n⌨️ TESTING ANSI ESCAPE SEQUENCE PROCESSING");
-        
+
         let mut test_term = Term::new(Config::default(), &size, VoidListener);
-        
+
         // Test ANSI color and formatting sequences
         let test_data = "\x1b[1;31mBold Red Text\x1b[0m Normal \x1b[4mUnderline\x1b[0m";
         let bytes = test_data.as_bytes();
-        
+
         // Test both approaches: VTE parser vs direct Handler::input
         println!("\\n🧪 Testing ANSI escape sequence processing approaches:");
-        
+
         // Approach 1: Direct Handler::input (current wrong approach)
         println!("   Approach 1: Direct Handler::input (bypasses VTE parser)");
         {
@@ -125,7 +125,7 @@ mod tests {
                 test_term.input(ch);
             }
         }
-        
+
         // Approach 2: VTE Parser (correct approach like alacritty)
         println!("   Approach 2: VTE Parser byte-by-byte (like alacritty)");
         let mut test_term2 = Term::new(Config::default(), &size, VoidListener);
@@ -136,66 +136,98 @@ mod tests {
                 parser.advance(&mut test_term2, byte);
             }
         }
-        
+
         // Compare results from both approaches
         let test_grid1 = test_term.grid();
         let test_grid2 = test_term2.grid();
-        
+
         println!("\\n📊 Comparison Results:");
         println!("   Input: \\x1b[1;31mBold Red Text\\x1b[0m");
-        
+
         println!("\\n   Approach 1 (Handler::input) - First 4 chars:");
         for i in 0..4 {
             let point = Point::new(Line(0), Column(i));
             let cell = &test_grid1[point];
-            println!("     Char {}: '{}' - Bold: {} - Color: {:?}", 
-                i, cell.c, 
+            println!(
+                "     Char {}: '{}' - Bold: {} - Color: {:?}",
+                i,
+                cell.c,
                 cell.flags.contains(Flags::BOLD),
                 cell.fg
             );
         }
-        
+
         println!("\\n   Approach 2 (VTE Parser) - First 4 chars:");
         for i in 0..4 {
             let point = Point::new(Line(0), Column(i));
             let cell = &test_grid2[point];
-            println!("     Char {}: '{}' - Bold: {} - Color: {:?}", 
-                i, cell.c, 
+            println!(
+                "     Char {}: '{}' - Bold: {} - Color: {:?}",
+                i,
+                cell.c,
                 cell.flags.contains(Flags::BOLD),
                 cell.fg
             );
         }
-        
+
         // Test cursor positioning for both approaches
         let cursor_pos1 = test_grid1.cursor.point;
         let cursor_pos2 = test_grid2.cursor.point;
         println!("\\n   Cursor positions:");
-        println!("     Approach 1: ({}, {})", cursor_pos1.line.0, cursor_pos1.column.0);
-        println!("     Approach 2: ({}, {})", cursor_pos2.line.0, cursor_pos2.column.0);
-        
-        // Verify both approaches work  
+        println!(
+            "     Approach 1: ({}, {})",
+            cursor_pos1.line.0, cursor_pos1.column.0
+        );
+        println!(
+            "     Approach 2: ({}, {})",
+            cursor_pos2.line.0, cursor_pos2.column.0
+        );
+
+        // Verify both approaches work
         let has_content1 = (0..10).any(|col| {
             let point = Point::new(Line(0), Column(col));
             let cell = &test_grid1[point];
             cell.c != ' '
         });
-        
+
         let has_content2 = (0..10).any(|col| {
             let point = Point::new(Line(0), Column(col));
             let cell = &test_grid2[point];
             cell.c != ' '
         });
-        
+
         println!("\\n✅ PROCESSING RESULTS:");
-        println!("   Approach 1 (Handler::input): {}", if has_content1 { "HAS CONTENT" } else { "NO CONTENT" });
-        println!("   Approach 2 (VTE Parser): {}", if has_content2 { "HAS CONTENT" } else { "NO CONTENT" });
-        
+        println!(
+            "   Approach 1 (Handler::input): {}",
+            if has_content1 {
+                "HAS CONTENT"
+            } else {
+                "NO CONTENT"
+            }
+        );
+        println!(
+            "   Approach 2 (VTE Parser): {}",
+            if has_content2 {
+                "HAS CONTENT"
+            } else {
+                "NO CONTENT"
+            }
+        );
+
         // Test which approach correctly processes ANSI
         let first_cell1 = &test_grid1[Point::new(Line(0), Column(0))];
         let first_cell2 = &test_grid2[Point::new(Line(0), Column(0))];
         println!("\\n✅ ANSI FORMATTING TEST:");
-        println!("   Approach 1 - Bold: {} | Color: {:?}", first_cell1.flags.contains(Flags::BOLD), first_cell1.fg);
-        println!("   Approach 2 - Bold: {} | Color: {:?}", first_cell2.flags.contains(Flags::BOLD), first_cell2.fg);
+        println!(
+            "   Approach 1 - Bold: {} | Color: {:?}",
+            first_cell1.flags.contains(Flags::BOLD),
+            first_cell1.fg
+        );
+        println!(
+            "   Approach 2 - Bold: {} | Color: {:?}",
+            first_cell2.flags.contains(Flags::BOLD),
+            first_cell2.fg
+        );
 
         println!("\\n=== MIGRATION REQUIREMENTS IDENTIFIED ===");
         println!("✅ Terminal creation: Simple API change");

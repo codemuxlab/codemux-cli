@@ -9,10 +9,8 @@ use axum::{
 use futures::stream::Stream;
 use std::convert::Infallible;
 
-use crate::core::{
-    json_api_error_response_with_headers, json_api_response_with_headers,
-};
 use super::types::{AppState, CreateSessionRequest};
+use crate::core::{json_api_error_response_with_headers, json_api_response_with_headers};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
@@ -35,7 +33,7 @@ async fn session_exists(session_id: &str) -> Result<bool, std::io::Error> {
 
         let project_path = project_dir.path();
         let session_file = project_path.join(format!("{}.jsonl", session_id));
-        
+
         if session_file.exists() {
             return Ok(true);
         }
@@ -131,12 +129,18 @@ pub async fn create_session(
         } else if let Some(resume_idx) = req.args.iter().position(|arg| arg == "--resume") {
             // Handle explicit --resume flag
             if let Some(session_id) = req.args.get(resume_idx + 1) {
-                tracing::info!("Server: Processing --resume flag with session: {}", session_id);
-                
+                tracing::info!(
+                    "Server: Processing --resume flag with session: {}",
+                    session_id
+                );
+
                 // Validate that the session exists
                 match session_exists(session_id).await {
                     Ok(true) => {
-                        tracing::info!("Server: Session {} exists, proceeding with resume", session_id);
+                        tracing::info!(
+                            "Server: Session {} exists, proceeding with resume",
+                            session_id
+                        );
                         Some(session_id.clone())
                     }
                     Ok(false) => {
@@ -173,7 +177,13 @@ pub async fn create_session(
 
     match state
         .session_manager
-        .create_session_with_path(req.agent, req.args, req.project_id, req.path, resume_session_id)
+        .create_session_with_path(
+            req.agent,
+            req.args,
+            req.project_id,
+            req.path,
+            resume_session_id,
+        )
         .await
     {
         Ok(info) => {
@@ -196,9 +206,7 @@ pub async fn get_session(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     match state.session_manager.get_session(&id).await {
-        Some(info) => {
-            json_api_response_with_headers(info)
-        }
+        Some(info) => json_api_response_with_headers(info),
         None => json_api_error_response_with_headers(
             axum::http::StatusCode::NOT_FOUND,
             "Session Not Found".to_string(),

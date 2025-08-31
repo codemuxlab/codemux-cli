@@ -360,7 +360,12 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
                             println!("📂 Projects ({}):", projects.len());
                             for project_resource in projects {
                                 if let Some(project) = project_resource.attributes {
-                                    let session_count = project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]).len();
+                                    let session_count = project_resource
+                                        .relationships
+                                        .as_ref()
+                                        .and_then(|r| r.recent_sessions.as_deref())
+                                        .unwrap_or(&[])
+                                        .len();
                                     println!("  • {} ({} sessions)", project.name, session_count);
                                 }
                             }
@@ -505,14 +510,22 @@ pub async fn list_sessions(config: Config) -> Result<()> {
                 for project_resource in projects {
                     if let Some(project) = project_resource.attributes {
                         println!("\n📂 Project: {}", project.name);
-                        if project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]).is_empty() {
+                        if project_resource
+                            .relationships
+                            .as_ref()
+                            .and_then(|r| r.recent_sessions.as_deref())
+                            .unwrap_or(&[])
+                            .is_empty()
+                        {
                             println!("   No active sessions");
                         } else {
-                            for session_ref in project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]) {
-                                println!(
-                                    "   🚀 Session: {}",
-                                    session_ref.id
-                                );
+                            for session_ref in project_resource
+                                .relationships
+                                .as_ref()
+                                .and_then(|r| r.recent_sessions.as_deref())
+                                .unwrap_or(&[])
+                            {
+                                println!("   🚀 Session: {}", session_ref.id);
                             }
                         }
                     }
@@ -547,14 +560,21 @@ pub async fn list_projects(config: Config) -> Result<()> {
             } else {
                 for project_resource in projects {
                     if let Some(project) = project_resource.attributes {
-                        let session_count = project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]).len();
+                        let session_count = project_resource
+                            .relationships
+                            .as_ref()
+                            .and_then(|r| r.recent_sessions.as_deref())
+                            .unwrap_or(&[])
+                            .len();
                         println!("   • {} ({} sessions)", project.name, session_count);
                         if session_count > 0 {
-                            for session_ref in project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]) {
-                                println!(
-                                    "     └── Session: {}",
-                                    session_ref.id
-                                );
+                            for session_ref in project_resource
+                                .relationships
+                                .as_ref()
+                                .and_then(|r| r.recent_sessions.as_deref())
+                                .unwrap_or(&[])
+                            {
+                                println!("     └── Session: {}", session_ref.id);
                             }
                         }
                     }
