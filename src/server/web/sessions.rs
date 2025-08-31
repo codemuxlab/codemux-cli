@@ -9,11 +9,10 @@ use axum::{
 use futures::stream::Stream;
 use std::convert::Infallible;
 
-use super::json_api::{
-    json_api_error_response_with_headers, json_api_response_with_headers, JsonApiResource,
+use crate::core::{
+    json_api_error_response_with_headers, json_api_response_with_headers,
 };
 use super::types::{AppState, CreateSessionRequest};
-use crate::core::session::SessionInfo;
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
@@ -109,8 +108,7 @@ pub async fn create_session(
     {
         Ok(info) => {
             tracing::info!("Session created successfully: {}", info.id);
-            let resource: JsonApiResource<SessionInfo> = info.into();
-            json_api_response_with_headers(resource)
+            json_api_response_with_headers(info)
         }
         Err(e) => {
             tracing::error!("Failed to create session: {}", e);
@@ -129,8 +127,7 @@ pub async fn get_session(
 ) -> impl IntoResponse {
     match state.session_manager.get_session(&id).await {
         Some(info) => {
-            let resource: JsonApiResource<SessionInfo> = info.into();
-            json_api_response_with_headers(resource)
+            json_api_response_with_headers(info)
         }
         None => json_api_error_response_with_headers(
             axum::http::StatusCode::NOT_FOUND,
@@ -170,7 +167,8 @@ pub async fn stream_session_jsonl(
 
         if let Some(info) = session_info {
             // Only process Claude sessions
-            if info.agent.to_lowercase() == "claude" {
+            if let Some(attrs) = &info.attributes {
+                if attrs.agent.to_lowercase() == "claude" {
                 // Get current working directory and convert to dash-case for project folder
                 let cwd = std::env::current_dir().unwrap_or_default();
                 let cwd_str = cwd.to_string_lossy();
@@ -242,8 +240,11 @@ pub async fn stream_session_jsonl(
                 } else {
                     yield Ok(Event::default().data(format!("JSONL file not found: {}", jsonl_path)));
                 }
+                } else {
+                    yield Ok(Event::default().data(format!("Not a Claude session: {}", attrs.agent)));
+                }
             } else {
-                yield Ok(Event::default().data(format!("Not a Claude session: {}", info.agent)));
+                yield Ok(Event::default().data("Session missing attributes"));
             }
         } else {
             yield Ok(Event::default().data("Session not found"));

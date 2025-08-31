@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Result};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::time::Duration;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 use crate::core::pty_session::{GridUpdateMessage, PtyInputMessage};
 use crate::core::{
-    ClientMessage, Config, ProjectInfo, ProjectWithSessions, ServerMessage, SessionInfo,
+    ClientMessage, Config, JsonApiDocument, ProjectResource, SessionResource, ServerMessage,
 };
 
 #[derive(Debug, Clone)]
@@ -29,89 +29,6 @@ pub struct CreateProjectRequest {
     pub path: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct JsonApiDocument<T> {
-    data: T,
-}
-
-#[derive(Debug, Deserialize)]
-struct JsonApiResource<T> {
-    #[serde(rename = "type")]
-    #[allow(dead_code)]
-    resource_type: String,
-    #[allow(dead_code)]
-    id: String,
-    attributes: Option<T>,
-}
-
-impl CodeMuxClient {
-    /// Extract data from JSON API response
-    #[allow(dead_code)]
-    async fn extract_from_json_api_response<T>(response: reqwest::Response) -> Result<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        let response_text = response.text().await?;
-
-        // Try JSON API format first
-        if let Ok(json_api) = serde_json::from_str::<JsonApiDocument<T>>(&response_text) {
-            return Ok(json_api.data);
-        }
-
-        // If that failed, try direct format (backwards compatibility)
-        let data: T = serde_json::from_str(&response_text)
-            .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
-        Ok(data)
-    }
-
-    /// Extract data from JSON API resource response
-    async fn extract_from_json_api_resource<T>(response: reqwest::Response) -> Result<T>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        let response_text = response.text().await?;
-
-        // Try JSON API resource format first
-        if let Ok(json_api) =
-            serde_json::from_str::<JsonApiDocument<JsonApiResource<T>>>(&response_text)
-        {
-            if let Some(attributes) = json_api.data.attributes {
-                return Ok(attributes);
-            }
-        }
-
-        // If that failed, try direct format (backwards compatibility)
-        let data: T = serde_json::from_str(&response_text)
-            .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
-        Ok(data)
-    }
-
-    /// Extract array data from JSON API resource array response
-    async fn extract_from_json_api_resource_array<T>(response: reqwest::Response) -> Result<Vec<T>>
-    where
-        T: for<'de> Deserialize<'de>,
-    {
-        let response_text = response.text().await?;
-
-        // Try JSON API resource array format first
-        if let Ok(json_api) =
-            serde_json::from_str::<JsonApiDocument<Vec<JsonApiResource<T>>>>(&response_text)
-        {
-            let mut results = Vec::new();
-            for resource in json_api.data {
-                if let Some(attributes) = resource.attributes {
-                    results.push(attributes);
-                }
-            }
-            return Ok(results);
-        }
-
-        // If that failed, try direct format (backwards compatibility)
-        let data: Vec<T> = serde_json::from_str(&response_text)
-            .map_err(|e| anyhow!("Failed to parse response: {}", e))?;
-        Ok(data)
-    }
-}
 
 impl CodeMuxClient {
     pub fn new(base_url: String) -> Self {
@@ -144,7 +61,7 @@ impl CodeMuxClient {
         agent: String,
         args: Vec<String>,
         project_id: Option<String>,
-    ) -> Result<SessionInfo> {
+    ) -> Result<SessionResource> {
         let request = CreateSessionRequest {
             agent: agent.clone(),
             args: args.clone(),
@@ -182,19 +99,15 @@ impl CodeMuxClient {
             ));
         }
 
+        tracing::debug!("POST /api/sessions response status: {}", response.status());
+
         let response_text = response.text().await?;
-        tracing::debug!("POST /api/sessions response body: {}", response_text);
+        let json_api: JsonApiDocument<SessionResource> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse session response: {}", e))?;
+        let session_resource = json_api.data;
 
-        let session: SessionInfo = serde_json::from_str(&response_text).map_err(|e| {
-            anyhow!(
-                "Failed to parse session response: {} - Response: {}",
-                e,
-                response_text
-            )
-        })?;
-
-        tracing::debug!("Parsed session info: {:?}", session);
-        Ok(session)
+        tracing::debug!("Parsed session resource: {:?}", session_resource);
+        Ok(session_resource)
     }
 
     /// Create a new session on the server with explicit path
@@ -203,7 +116,7 @@ impl CodeMuxClient {
         agent: String,
         args: Vec<String>,
         path: String,
-    ) -> Result<SessionInfo> {
+    ) -> Result<SessionResource> {
         let request = CreateSessionRequest {
             agent: agent.clone(),
             args: args.clone(),
@@ -241,23 +154,19 @@ impl CodeMuxClient {
             ));
         }
 
+        tracing::debug!("POST /api/sessions response status: {}", response.status());
+
         let response_text = response.text().await?;
-        tracing::debug!("POST /api/sessions response body: {}", response_text);
+        let json_api: JsonApiDocument<SessionResource> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse session response: {}", e))?;
+        let session_resource = json_api.data;
 
-        let session: SessionInfo = serde_json::from_str(&response_text).map_err(|e| {
-            anyhow!(
-                "Failed to parse session response: {} - Response: {}",
-                e,
-                response_text
-            )
-        })?;
-
-        tracing::debug!("Parsed session info: {:?}", session);
-        Ok(session)
+        tracing::debug!("Parsed session resource: {:?}", session_resource);
+        Ok(session_resource)
     }
 
     /// Get session information
-    pub async fn get_session(&self, session_id: &str) -> Result<SessionInfo> {
+    pub async fn get_session(&self, session_id: &str) -> Result<SessionResource> {
         let response = self
             .client
             .get(format!("{}/api/sessions/{}", self.base_url, session_id))
@@ -268,18 +177,39 @@ impl CodeMuxClient {
             return Err(anyhow!("Failed to get session: {}", response.status()));
         }
 
-        let session: SessionInfo = response.json().await?;
-        Ok(session)
+        let response_text = response.text().await?;
+        let json_api: JsonApiDocument<SessionResource> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse session response: {}", e))?;
+        let session_resource = json_api.data;
+        Ok(session_resource)
     }
 
-    /// List all sessions (extracted from projects)
-    pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
+    /// List all sessions (extracted from project relationships)
+    pub async fn list_sessions(&self) -> Result<Vec<SessionResource>> {
         let projects = self.list_projects().await?;
 
-        // Extract all sessions from all projects
+        // Collect all session IDs from project relationships
+        let mut session_ids = Vec::new();
+        for project_resource in projects {
+            if let Some(relationships) = &project_resource.relationships {
+                if let Some(recent_sessions) = &relationships.recent_sessions {
+                    for session_ref in recent_sessions {
+                        session_ids.push(session_ref.id.clone());
+                    }
+                }
+            }
+        }
+
+        // Fetch each session individually
         let mut all_sessions = Vec::new();
-        for project in projects {
-            all_sessions.extend(project.sessions);
+        for session_id in session_ids {
+            match self.get_session(&session_id).await {
+                Ok(session) => all_sessions.push(session),
+                Err(e) => {
+                    tracing::warn!("Failed to fetch session {}: {}", session_id, e);
+                    // Continue with other sessions
+                }
+            }
         }
 
         Ok(all_sessions)
@@ -301,7 +231,7 @@ impl CodeMuxClient {
     }
 
     /// Create a new project
-    pub async fn create_project(&self, name: String, path: String) -> Result<ProjectInfo> {
+    pub async fn create_project(&self, name: String, path: String) -> Result<ProjectResource> {
         let request = CreateProjectRequest { name, path };
 
         let response = self
@@ -315,12 +245,15 @@ impl CodeMuxClient {
             return Err(anyhow!("Failed to create project: {}", response.status()));
         }
 
-        let project = Self::extract_from_json_api_resource(response).await?;
-        Ok(project)
+        let response_text = response.text().await?;
+        let json_api: JsonApiDocument<ProjectResource> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse project response: {}", e))?;
+        let project_resource = json_api.data;
+        Ok(project_resource)
     }
 
     /// List all projects
-    pub async fn list_projects(&self) -> Result<Vec<ProjectWithSessions>> {
+    pub async fn list_projects(&self) -> Result<Vec<ProjectResource>> {
         let response = self
             .client
             .get(format!("{}/api/projects", self.base_url))
@@ -331,8 +264,11 @@ impl CodeMuxClient {
             return Err(anyhow!("Failed to list projects: {}", response.status()));
         }
 
-        let projects = Self::extract_from_json_api_resource_array(response).await?;
-        Ok(projects)
+        let response_text = response.text().await?;
+        let json_api: JsonApiDocument<Vec<ProjectResource>> = serde_json::from_str(&response_text)
+            .map_err(|e| anyhow!("Failed to parse JSON API resource array response: {}", e))?;
+
+        Ok(json_api.data)
     }
 
     /// Resolve a directory path to a project ID
@@ -363,29 +299,31 @@ impl CodeMuxClient {
         // Get all projects and find matching path
         let projects = self.list_projects().await?;
 
-        for project in projects {
-            let project_path = std::path::PathBuf::from(&project.path);
-            let canonical_project = project_path.canonicalize().ok();
+        for project_resource in projects {
+            if let Some(project_attrs) = project_resource.attributes {
+                let project_path = std::path::PathBuf::from(&project_attrs.path);
+                let canonical_project = project_path.canonicalize().ok();
 
-            // Try exact match first
-            if project.path == path_input {
-                return Ok(Some(project.id));
-            }
-
-            // Try canonical path match (handles symlinks, .., etc.)
-            if let (Some(canonical_input), Some(canonical_project)) =
-                (&canonical_input, &canonical_project)
-            {
-                if canonical_input == canonical_project {
-                    return Ok(Some(project.id));
+                // Try exact match first
+                if project_attrs.path == path_input {
+                    return Ok(Some(project_resource.id));
                 }
-            }
 
-            // Try path contains match (for subdirectories)
-            if let Some(canonical_input) = &canonical_input {
-                if let Some(canonical_project) = &canonical_project {
-                    if canonical_input.starts_with(canonical_project) {
-                        return Ok(Some(project.id));
+                // Try canonical path match (handles symlinks, .., etc.)
+                if let (Some(canonical_input), Some(canonical_project)) =
+                    (&canonical_input, &canonical_project)
+                {
+                    if canonical_input == canonical_project {
+                        return Ok(Some(project_resource.id));
+                    }
+                }
+
+                // Try path contains match (for subdirectories)
+                if let Some(canonical_input) = &canonical_input {
+                    if let Some(canonical_project) = &canonical_project {
+                        if canonical_input.starts_with(canonical_project) {
+                            return Ok(Some(project_resource.id));
+                        }
                     }
                 }
             }

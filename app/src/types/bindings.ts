@@ -27,12 +27,19 @@ export type {
 	KeyModifiers,
 	KeyModifiers as WebKeyModifiers,
 } from "../../../bindings/KeyModifiers";
+export type { ProjectAttributes } from "../../../bindings/ProjectAttributes";
 export type { ProjectInfo } from "../../../bindings/ProjectInfo";
+export type { ProjectListResponse } from "../../../bindings/ProjectListResponse";
+export type { ProjectRelationships } from "../../../bindings/ProjectRelationships";
+export type { ProjectResourceTS } from "../../../bindings/ProjectResourceTS";
 export type { ProjectWithSessions } from "../../../bindings/ProjectWithSessions";
 export type { ScrollDirection } from "../../../bindings/ScrollDirection";
 export type { SerializablePtySize } from "../../../bindings/SerializablePtySize";
 export type { ServerMessage } from "../../../bindings/ServerMessage";
+export type { SessionAttributes } from "../../../bindings/SessionAttributes";
 export type { SessionInfo } from "../../../bindings/SessionInfo";
+export type { SessionResourceTS } from "../../../bindings/SessionResourceTS";
+export type { SessionResponse } from "../../../bindings/SessionResponse";
 export type { SessionType } from "../../../bindings/SessionType";
 export type {
 	TerminalColor,

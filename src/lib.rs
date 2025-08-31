@@ -11,7 +11,7 @@ pub mod utils;
 
 // Re-export commonly used types
 pub use client::http::CodeMuxClient;
-pub use core::{Config, ProjectInfo, ProjectWithSessions, SessionInfo};
+pub use core::{Config, ProjectAttributes, ProjectResource, SessionAttributes, SessionResource};
 pub use server::SessionManagerHandle;
 
 // Error handling

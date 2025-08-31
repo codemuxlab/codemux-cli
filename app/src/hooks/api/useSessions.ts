@@ -17,7 +17,20 @@ export const useSessions = (options: UseSessionsOptions = {}) => {
 
 	return useQuery({
 		queryKey: queryKeys.sessions(),
-		queryFn: api.sessions.list,
+		queryFn: async () => {
+			// Get sessions directly from project relationships to avoid deep API calls
+			const projects = await api.projects.list();
+			const allSessions: Session[] = [];
+
+			for (const project of projects) {
+				if (project.relationships?.recent_sessions) {
+					// Use session resources from relationships directly
+					allSessions.push(...project.relationships.recent_sessions);
+				}
+			}
+
+			return allSessions;
+		},
 		refetchInterval: enabled ? refetchInterval : false,
 		enabled,
 		meta: {

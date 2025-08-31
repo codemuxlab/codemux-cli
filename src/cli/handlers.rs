@@ -344,9 +344,11 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
                             println!("📂 No projects registered");
                         } else {
                             println!("📂 Projects ({}):", projects.len());
-                            for project in projects {
-                                let session_count = project.sessions.len();
-                                println!("  • {} ({} sessions)", project.name, session_count);
+                            for project_resource in projects {
+                                if let Some(project) = project_resource.attributes {
+                                    let session_count = project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]).len();
+                                    println!("  • {} ({} sessions)", project.name, session_count);
+                                }
                             }
                         }
                     }
@@ -486,16 +488,18 @@ pub async fn list_sessions(config: Config) -> Result<()> {
                 println!("   No projects or sessions found");
                 println!("💡 Add a project with: codemux add-project <path>");
             } else {
-                for project in projects {
-                    println!("\n📂 Project: {}", project.name);
-                    if project.sessions.is_empty() {
-                        println!("   No active sessions");
-                    } else {
-                        for session in &project.sessions {
-                            println!(
-                                "   🚀 {} ({}): {}",
-                                session.agent, session.status, session.id
-                            );
+                for project_resource in projects {
+                    if let Some(project) = project_resource.attributes {
+                        println!("\n📂 Project: {}", project.name);
+                        if project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]).is_empty() {
+                            println!("   No active sessions");
+                        } else {
+                            for session_ref in project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]) {
+                                println!(
+                                    "   🚀 Session: {}",
+                                    session_ref.id
+                                );
+                            }
                         }
                     }
                 }
@@ -527,15 +531,17 @@ pub async fn list_projects(config: Config) -> Result<()> {
                 println!("   No projects registered");
                 println!("💡 Add a project with: codemux add-project <path>");
             } else {
-                for project in projects {
-                    let session_count = project.sessions.len();
-                    println!("   • {} ({} sessions)", project.name, session_count);
-                    if session_count > 0 {
-                        for session in &project.sessions {
-                            println!(
-                                "     └── {} ({}): {}",
-                                session.agent, session.status, session.id
-                            );
+                for project_resource in projects {
+                    if let Some(project) = project_resource.attributes {
+                        let session_count = project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]).len();
+                        println!("   • {} ({} sessions)", project.name, session_count);
+                        if session_count > 0 {
+                            for session_ref in project_resource.relationships.as_ref().and_then(|r| r.recent_sessions.as_deref()).unwrap_or(&[]) {
+                                println!(
+                                    "     └── Session: {}",
+                                    session_ref.id
+                                );
+                            }
                         }
                     }
                 }

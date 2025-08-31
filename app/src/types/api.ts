@@ -1,4 +1,8 @@
-import type { GridCell, ProjectWithSessions, SessionInfo } from "./bindings";
+import type {
+	GridCell,
+	ProjectResourceTS,
+	SessionResourceTS,
+} from "./bindings";
 
 // Base types for API responses
 export interface ApiResponse<T = unknown> {
@@ -13,18 +17,18 @@ export interface ApiError {
 	status?: number;
 }
 
-// Session related types - extend from generated bindings
-// Use generated SessionInfo directly from backend
-export type { SessionInfo as Session } from "./bindings";
+// Session related types - use new JSON API resource types
+export type Session = SessionResourceTS;
+export type Project = ProjectResourceTS;
+
+// Re-export response wrapper types
+export type { ProjectListResponse, SessionResponse } from "./bindings";
 
 export interface CreateSessionRequest {
 	agent?: string;
 	project_id?: string;
 	project_path?: string;
 }
-
-// Use generated ProjectWithSessions directly from backend
-export type { ProjectWithSessions as ProjectInfo } from "./bindings";
 
 export interface CreateProjectRequest {
 	name: string;
@@ -201,14 +205,15 @@ export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
 export type RequiredFields<T, K extends keyof T> = T & Required<Pick<T, K>>;
 
 // Export common type guards
-export const isSession = (obj: unknown): obj is SessionInfo => {
+export const isSession = (obj: unknown): obj is Session => {
 	return (
 		obj !== null &&
 		typeof obj === "object" &&
 		"id" in obj &&
-		typeof (obj as SessionInfo).id === "string" &&
-		"agent" in obj &&
-		typeof (obj as SessionInfo).agent === "string"
+		typeof (obj as Session).id === "string" &&
+		"attributes" in obj &&
+		(obj as Session).attributes !== null &&
+		typeof (obj as Session).attributes === "object"
 	);
 };
 
@@ -232,15 +237,14 @@ export const isGitDiff = (obj: unknown): obj is GitDiff => {
 	);
 };
 
-export const isProjectInfo = (obj: unknown): obj is ProjectWithSessions => {
+export const isProject = (obj: unknown): obj is Project => {
 	return (
 		obj !== null &&
 		typeof obj === "object" &&
 		"id" in obj &&
-		typeof (obj as ProjectWithSessions).id === "string" &&
-		"name" in obj &&
-		typeof (obj as ProjectWithSessions).name === "string" &&
-		"path" in obj &&
-		typeof (obj as ProjectWithSessions).path === "string"
+		typeof (obj as Project).id === "string" &&
+		"attributes" in obj &&
+		(obj as Project).attributes !== null &&
+		typeof (obj as Project).attributes === "object"
 	);
 };

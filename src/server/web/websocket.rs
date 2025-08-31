@@ -52,14 +52,18 @@ async fn handle_socket(
             );
 
             // Resume the session by creating a new PTY session with the same ID
-            match state
-                .session_manager
-                .resume_session(
-                    session_id.clone(),
-                    session_info.agent.clone(),
-                    vec![], // Resume with empty args
-                    session_info.project.clone(),
-                )
+            let session_attrs = session_info.attributes.as_ref().ok_or_else(|| {
+                tracing::error!("Session {} missing attributes", session_id);
+            });
+            if let Ok(attrs) = session_attrs {
+                match state
+                    .session_manager
+                    .resume_session(
+                        session_id.clone(),
+                        attrs.agent.clone(),
+                        vec![], // Resume with empty args
+                        attrs.project.clone(),
+                    )
                 .await
             {
                 Ok(_resumed_session) => {
@@ -83,6 +87,10 @@ async fn handle_socket(
                     tracing::error!("WebSocket: Failed to resume session {}: {}", session_id, e);
                     return;
                 }
+            }
+            } else {
+                tracing::error!("WebSocket: Session {} missing attributes", session_id);
+                return;
             }
         } else {
             tracing::error!(
@@ -108,7 +116,7 @@ async fn handle_socket(
         timestamp: std::time::SystemTime::now(),
     };
     if let Ok(welcome_str) = serde_json::to_string(&welcome_msg) {
-        tracing::debug!("WebSocket sending welcome message: {}", welcome_str);
+        tracing::trace!("WebSocket sending welcome message: {}", welcome_str);
         if socket.send(Message::Text(welcome_str)).await.is_err() {
             tracing::error!("Failed to send welcome message via WebSocket");
             return;
@@ -152,7 +160,7 @@ async fn handle_socket(
                 // Test that we can deserialize what we're about to send
                 match serde_json::from_str::<ServerMessage>(&keyframe_str) {
                     Ok(_) => {
-                        tracing::debug!("WebSocket sending initial keyframe: {} chars (verified deserializable)", keyframe_str.len());
+                        tracing::trace!("WebSocket sending initial keyframe: {} chars (verified deserializable)", keyframe_str.len());
                     }
                     Err(e) => {
                         tracing::error!("Initial keyframe cannot be deserialized: {}", e);
@@ -187,7 +195,7 @@ async fn handle_socket(
                             // Test that we can deserialize what we're about to send
                             match serde_json::from_str::<ServerMessage>(&grid_msg) {
                                 Ok(_) => {
-                                    tracing::debug!("WebSocket sending grid update: {} chars (verified deserializable)", grid_msg.len());
+                                    tracing::trace!("WebSocket sending grid update: {} chars (verified deserializable)", grid_msg.len());
                                 }
                                 Err(e) => {
                                     tracing::error!("Grid update message cannot be deserialized: {}", e);
@@ -215,7 +223,7 @@ async fn handle_socket(
                 match pty_output {
                     Ok(_output_msg) => {
                         // Debug: show raw PTY output
-                        tracing::debug!("WebSocket received raw PTY output: {} bytes", _output_msg.data.len());
+                        tracing::trace!("WebSocket received raw PTY output: {} bytes", _output_msg.data.len());
                         // Skip raw output - we're using grid updates now
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
@@ -252,11 +260,11 @@ async fn handle_socket(
             ws_msg = socket.recv() => {
                 match ws_msg {
                     Some(Ok(Message::Text(text))) => {
-                        tracing::debug!("WebSocket received message: {} chars", text.len());
+                        tracing::trace!("WebSocket received message: {} chars", text.len());
                         if let Ok(client_msg) = serde_json::from_str::<ClientMessage>(&text) {
                             match client_msg {
                                 ClientMessage::Key { code, modifiers } => {
-                                    tracing::debug!("WebSocket received key event: {:?} with modifiers {:?}", code, modifiers);
+                                    tracing::trace!("WebSocket received key event: {:?} with modifiers {:?}", code, modifiers);
                                     // Convert to PtyInputMessage with key event
                                     let key_event = crate::core::pty_session::KeyEvent { code, modifiers };
                                     let input_msg = crate::core::pty_session::PtyInputMessage {
@@ -271,7 +279,7 @@ async fn handle_socket(
                                     }
                                 }
                                 ClientMessage::Scroll { direction, lines } => {
-                                    tracing::debug!("WebSocket received scroll: {:?} {} lines", direction, lines);
+                                    tracing::trace!("WebSocket received scroll: {:?} {} lines", direction, lines);
                                     // Convert to PtyInputMessage with scroll event
                                     let input_msg = crate::core::pty_session::PtyInputMessage {
                                         input: crate::core::pty_session::PtyInput::Scroll {
@@ -286,7 +294,7 @@ async fn handle_socket(
                                     }
                                 }
                                 ClientMessage::Resize { rows, cols } => {
-                                    tracing::debug!("WebSocket received resize: {}x{}", cols, rows);
+                                    tracing::trace!("WebSocket received resize: {}x{}", cols, rows);
                                     // Send resize control message to PTY
                                     let resize_msg = crate::core::pty_session::PtyControlMessage::Resize { rows, cols };
                                     if let Err(e) = pty_channels.control_tx.send(resize_msg) {

@@ -458,7 +458,7 @@ impl PtySession {
 
         // Create the blocking PTY reader task
         let reader_task = tokio::task::spawn_blocking(move || {
-            tracing::debug!("PTY reader task started, beginning read loop");
+            tracing::trace!("PTY reader task started, beginning read loop");
             let mut read_buffer = [0u8; 1024];
             let mut read_count = 0u64;
 
@@ -466,7 +466,7 @@ impl PtySession {
                 let read_result = {
                     let mut reader_guard = reader.lock().expect("Failed to lock reader");
                     read_count += 1;
-                    tracing::debug!("PTY read attempt #{}", read_count);
+                    tracing::trace!("PTY read attempt #{}", read_count);
                     reader_guard.read(&mut read_buffer)
                 };
 
@@ -491,7 +491,7 @@ impl PtySession {
                                 }
                             })
                             .collect();
-                        tracing::debug!("PTY read {} bytes: '{}'", n, printable);
+                        tracing::trace!("PTY read {} bytes: '{}'", n, printable);
 
                         // Send data to async processor
                         if raw_data_tx.send(data).is_err() {
@@ -509,7 +509,7 @@ impl PtySession {
                         if e.kind() == std::io::ErrorKind::Interrupted
                             || e.kind() == std::io::ErrorKind::WouldBlock
                         {
-                            tracing::debug!("Recoverable PTY read error, continuing");
+                            tracing::trace!("Recoverable PTY read error, continuing");
                             std::thread::sleep(std::time::Duration::from_millis(50));
                             continue;
                         }
@@ -564,7 +564,7 @@ impl PtySession {
                         // Only process if there's been no new data for the debounce period
                         if last_data_time.elapsed() >= debounce_delay {
                             // Process all accumulated data at once
-                            tracing::debug!("Processing {} accumulated data chunks after {}ms of inactivity",
+                            tracing::trace!("Processing {} accumulated data chunks after {}ms of inactivity",
                                 pending_data.len(), last_data_time.elapsed().as_millis());
 
                             // Track cursor before processing
@@ -616,7 +616,7 @@ impl PtySession {
 
                         // Log first 100 chars of processed data for debugging
                         let data_sample = String::from_utf8_lossy(&all_data[..all_data.len().min(100)]).replace('\x1b', "\\x1b");
-                        tracing::debug!("VT100 parser processed {} total bytes: '{}'", all_data.len(), data_sample);
+                        tracing::trace!("VT100 parser processed {} total bytes: '{}'", all_data.len(), data_sample);
 
                         // Track cursor after processing
                         let cursor_after = {
@@ -648,7 +648,7 @@ impl PtySession {
                             // Categorize the types of changes for debugging
                             match update {
                                 GridUpdateMessage::Keyframe { size, cells, cursor, .. } => {
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         "Generated keyframe: {} total cells, size {}x{}, cursor: ({}, {})",
                                         cells.len(),
                                         size.rows,
@@ -703,7 +703,7 @@ impl PtySession {
                                         "unchanged".to_string()
                                     };
 
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         "Generated grid diff: {} total changes ({} clears, {} text, {} style), cursor: {}",
                                         changes.len(),
                                         clear_changes,
@@ -713,7 +713,7 @@ impl PtySession {
                                     );
 
                                     if !sample_changes.is_empty() {
-                                        tracing::debug!("Sample changes: {}", sample_changes.join(", "));
+                                        tracing::trace!("Sample changes: {}", sample_changes.join(", "));
                                     }
 
                                     // Show which screen regions are changing most
@@ -734,13 +734,13 @@ impl PtySession {
                                         .collect();
 
                                     if !region_summary.is_empty() {
-                                        tracing::debug!("Changes by region: {}", region_summary.join(", "));
+                                        tracing::trace!("Changes by region: {}", region_summary.join(", "));
                                     }
                                 }
                             }
                             let _ = processor_grid_tx.send(update.clone());
                         } else {
-                            tracing::debug!("No grid update generated (no changes)");
+                            tracing::trace!("No grid update generated (no changes)");
                         }
 
                         // Update last activity time for debounce timer
@@ -777,13 +777,13 @@ impl PtySession {
             while let Some(msg) = input_rx.recv().await {
                 match &msg.input {
                     PtyInput::Key { event, .. } => {
-                        tracing::debug!("Processing key event: {:?}", event);
+                        tracing::trace!("Processing key event: {:?}", event);
                         
                         // Reset scroll position on any key press to return to current content
                         if let Err(e) = input_internal_tx.send(InternalControlMessage::ResetScroll) {
                             tracing::warn!("Failed to send scroll reset message: {}", e);
                         } else {
-                            tracing::debug!("Sent scroll reset on key press");
+                            tracing::trace!("Sent scroll reset on key press");
                         }
                         
                         let bytes = Self::key_event_to_bytes(event);
@@ -798,7 +798,7 @@ impl PtySession {
                     PtyInput::Scroll {
                         direction, lines, ..
                     } => {
-                        tracing::debug!("Processing scroll event: {:?} {} lines", direction, lines);
+                        tracing::trace!("Processing scroll event: {:?} {} lines", direction, lines);
 
                         // Use VT100 parser's built-in scrollback - it handles bounds internally
                         {
@@ -869,7 +869,7 @@ impl PtySession {
                         );
                         match msg {
                             PtyControlMessage::Resize { rows, cols } => {
-                                tracing::debug!("Processing resize request to {}x{}", cols, rows);
+                                tracing::trace!("Processing resize request to {}x{}", cols, rows);
 
                                 // Update PTY size
                                 let new_size = PtySize {
@@ -884,7 +884,7 @@ impl PtySession {
                                     if let Err(e) = pty_guard.resize(new_size) {
                                         tracing::error!("Failed to resize PTY to {}x{}: {}", cols, rows, e);
                                     } else {
-                                        tracing::debug!("Successfully resized PTY to {}x{}", cols, rows);
+                                        tracing::trace!("Successfully resized PTY to {}x{}", cols, rows);
                                     }
                                 }
 
@@ -931,13 +931,13 @@ impl PtySession {
                     }
                     internal_msg = internal_control_rx.recv() => {
                         let Some(internal_msg) = internal_msg else { break; };
-                        tracing::debug!("PTY Control task - Received internal control message: {:?}", internal_msg);
+                        tracing::trace!("PTY Control task - Received internal control message: {:?}", internal_msg);
 
                         match internal_msg {
                             InternalControlMessage::TriggerGridUpdate => {
                                 // Throttle scroll updates to avoid overwhelming the system
                                 if scroll_throttle.should_update() {
-                                    tracing::debug!("Control task - Triggering grid update after scroll");
+                                    tracing::trace!("Control task - Triggering grid update after scroll");
                                     let keyframe = Self::generate_keyframe(
                                         &control_vt_parser,
                                         &control_cursor_pos,
@@ -950,14 +950,14 @@ impl PtySession {
                                     if let Err(e) = control_grid_tx.send(keyframe) {
                                         tracing::warn!("Failed to send scroll keyframe to grid channel: {}", e);
                                     } else {
-                                        tracing::debug!("Scroll keyframe sent to grid channel");
+                                        tracing::trace!("Scroll keyframe sent to grid channel");
                                     }
                                 } else {
                                     tracing::trace!("Scroll update throttled - too soon since last update");
                                 }
                             }
                             InternalControlMessage::ResetScroll => {
-                                tracing::debug!("Control task - Resetting scroll position on key press");
+                                tracing::trace!("Control task - Resetting scroll position on key press");
                                 
                                 // Reset scrollback to 0 (current content)
                                 {
@@ -977,7 +977,7 @@ impl PtySession {
                                 if let Err(e) = control_grid_tx.send(keyframe) {
                                     tracing::warn!("Failed to send scroll reset keyframe to grid channel: {}", e);
                                 } else {
-                                    tracing::debug!("Scroll reset keyframe sent to grid channel");
+                                    tracing::trace!("Scroll reset keyframe sent to grid channel");
                                 }
                             }
                         }
@@ -1304,7 +1304,7 @@ impl PtySession {
             .collect::<Vec<_>>()
             .join("");
 
-        tracing::debug!(
+        tracing::trace!(
             "Generated keyframe: {} total cells, {} non-empty, size {}x{}, cursor=({},{}), sample: '{}'",
             current_grid.len(),
             non_empty_count,
