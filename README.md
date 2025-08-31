@@ -31,7 +31,7 @@ brew install codemuxlab/tap/codemux
 npm install -g codemux
 
 # Or run directly without installing
-npx codemux run claude
+npx codemux claude
 ```
 
 #### From Source
@@ -61,12 +61,13 @@ CodeMux uses a server-client model similar to tmux. The server manages all AI ag
 
 ```bash
 # Start a Claude session (auto-starts server if needed)
-codemux run claude
+codemux claude
 
 # Server management
-codemux server                    # Start server explicitly
-codemux server status            # Check server status  
+codemux server start            # Start server explicitly (optional --port, --detach)
+codemux server status           # Check server status  
 codemux server stop             # Stop server
+codemux stop                    # Alternative stop command
 
 # Session management
 codemux list                    # List all active sessions
@@ -74,11 +75,12 @@ codemux attach <session-id>     # Attach to existing session
 codemux kill-session <session-id>  # Terminate specific session
 
 # Session continuity options
-codemux run claude --continue           # Continue most recent session
-codemux run claude --resume <session>   # Resume specific session
+codemux claude --continue              # Continue most recent session
+codemux claude --resume <session>     # Resume specific session
 
 # Additional options
-codemux run claude --open               # Auto-open web interface
+codemux claude --open                  # Auto-open web interface
+codemux claude --logfile /path/to/log  # Log to file
 ```
 
 ### Project Management
@@ -91,7 +93,7 @@ codemux add-project /path/to/project --name "My Project"
 codemux list-projects
 
 # Create session in project context
-codemux run claude --project <project-id>
+codemux claude --project <project-id>
 ```
 
 #### Running server as system service (Optional)
@@ -104,7 +106,7 @@ For persistent server operation, you can install the server as a system service:
 npm install -g pm2
 
 # Start server with PM2
-pm2 start codemux --name "codemux-server" -- server
+pm2 start codemux --name "codemux-server" -- server start
 
 # Auto-start server on system boot
 pm2 startup
@@ -122,7 +124,7 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-ExecStart=$(which codemux) server
+ExecStart=$(which codemux) server start
 Restart=always
 
 [Install]
