@@ -2,4 +2,4 @@
   uses: actions/download-artifact@v4
   with:
     name: web-assets
-    path: app/dist/
+    path: expo-app/dist/

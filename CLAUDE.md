@@ -81,7 +81,7 @@ cargo clippy                             # Lint code
 
 ### React Native App (Expo)
 ```bash
-cd app
+cd expo-app
 npm install              # Install dependencies
 npm run lint             # Run Biome linter (REQUIRED before commits)
 npm run lint:fix         # Auto-fix linting issues where possible
@@ -98,7 +98,7 @@ npx expo export         # Export for production
 - **TanStack Query** for API state management and caching
 
 **Linting Requirements**:
-- **React Native App**: ALWAYS run `npm run lint` inside the `app/` directory before committing
+- **React Native App**: ALWAYS run `npm run lint` inside the `expo-app/` directory before committing
 - **Website**: ALWAYS run `npm run lint` inside the `website/` directory before committing  
 - Fix all linting errors and warnings before submitting changes
 - Both projects use Biome for strict TypeScript and React best practices
@@ -374,15 +374,15 @@ npx @react-native-reusables/cli@latest add [component-name]
 - **Utility**: Collapsible
 
 #### Configuration Files
-- **Global Styles**: `app/src/global.css` - CSS variables and Tailwind directives
-- **Tailwind Config**: `app/tailwind.config.js` - Theme colors, animations, border radius
-- **Components Config**: `app/components.json` - CLI tool configuration
-- **Theme Integration**: `app/src/lib/theme.ts` - React Navigation theme mapping
-- **Utilities**: `app/src/lib/utils.ts` - `cn()` className helper
+- **Global Styles**: `expo-app/src/global.css` - CSS variables and Tailwind directives
+- **Tailwind Config**: `expo-app/tailwind.config.js` - Theme colors, animations, border radius
+- **Components Config**: `expo-app/components.json` - CLI tool configuration
+- **Theme Integration**: `expo-app/src/lib/theme.ts` - React Navigation theme mapping
+- **Utilities**: `expo-app/src/lib/utils.ts` - `cn()` className helper
 
 #### Directory Structure
 ```
-app/src/
+expo-app/src/
 ├── components/ui/     # Generated component files
 ├── lib/
 │   ├── theme.ts      # React Navigation themes

@@ -20,16 +20,16 @@ jobs:
         uses: "actions/setup-node@v4"
         with:
           "cache": "npm"
-          "cache-dependency-path": "app/package-lock.json"
+          "cache-dependency-path": "expo-app/package-lock.json"
           "node-version": "18"
       - name: Install web dependencies
         run: |
-          cd app && npm install
+          cd expo-app && npm install
       - name: Build web assets
         run: |
-          cd app && npm run build
+          cd expo-app && npm run build
       - name: "Upload web assets"
         uses: actions/upload-artifact@v4
         with:
           name: web-assets
-          path: app/dist/
+          path: expo-app/dist/

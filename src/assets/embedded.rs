@@ -1,5 +1,5 @@
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
-#[folder = "app/dist"]
+#[folder = "expo-app/dist"]
 pub struct ReactAssets;

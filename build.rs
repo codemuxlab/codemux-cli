@@ -37,16 +37,16 @@ fn main() {
     }
 
     // Watch for changes in the React app
-    println!("cargo:rerun-if-changed=app/src");
-    println!("cargo:rerun-if-changed=app/package.json");
-    println!("cargo:rerun-if-changed=app/app.json");
-    println!("cargo:rerun-if-changed=app/tsconfig.json");
-    println!("cargo:rerun-if-changed=app/tailwind.config.js");
+    println!("cargo:rerun-if-changed=expo-app/src");
+    println!("cargo:rerun-if-changed=expo-app/package.json");
+    println!("cargo:rerun-if-changed=expo-app/app.json");
+    println!("cargo:rerun-if-changed=expo-app/tsconfig.json");
+    println!("cargo:rerun-if-changed=expo-app/tailwind.config.js");
 
     // Check if web assets already exist (from CI artifact)
-    if Path::new("app/dist").exists() {
+    if Path::new("expo-app/dist").exists() {
         println!("cargo:info=Using pre-built React Native Web assets from artifact");
-        println!("cargo:rustc-env=REACT_APP_DIR=app/dist");
+        println!("cargo:rustc-env=REACT_APP_DIR=expo-app/dist");
         return;
     }
 
@@ -61,13 +61,13 @@ fn main() {
     }
 
     // Check if we're in the right directory and have required files
-    if !Path::new("app/package.json").exists() {
-        println!("cargo:warning=No app/package.json found, skipping React Native Web build");
+    if !Path::new("expo-app/package.json").exists() {
+        println!("cargo:warning=No expo-app/package.json found, skipping React Native Web build");
         return;
     }
 
     // Check if node_modules exists, if not install dependencies
-    if !Path::new("app/node_modules").exists() {
+    if !Path::new("expo-app/node_modules").exists() {
         println!("cargo:warning=Installing React Native Web dependencies...");
 
         let npm_cmd = find_npm_command();
@@ -75,7 +75,7 @@ fn main() {
 
         let npm_install = Command::new(npm_cmd)
             .args(["install"])
-            .current_dir("app")
+            .current_dir("expo-app")
             .output()
             .expect("Failed to execute npm install");
 
@@ -94,7 +94,7 @@ fn main() {
     let npm_cmd = find_npm_command();
     let output = Command::new(npm_cmd)
         .args(["run", "build"])
-        .current_dir("app")
+        .current_dir("expo-app")
         .output()
         .expect("Failed to execute npm run build");
 
@@ -109,10 +109,10 @@ fn main() {
     println!("cargo:warning=React Native Web app built successfully");
 
     // Check that the dist directory was created
-    if !Path::new("app/dist").exists() {
+    if !Path::new("expo-app/dist").exists() {
         panic!("React Native Web build completed but no dist directory found");
     }
 
     // Tell cargo where to find the built assets
-    println!("cargo:rustc-env=REACT_APP_DIR=app/dist");
+    println!("cargo:rustc-env=REACT_APP_DIR=expo-app/dist");
 }
