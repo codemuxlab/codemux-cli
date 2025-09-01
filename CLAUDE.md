@@ -113,6 +113,7 @@ npx expo export         # Export for production
    - `codemux add-project <path>` - Register a project
    - `codemux list` - List projects/sessions
    - `codemux stop` - Stop server
+   - **Server Ports**: Debug builds use port 18765, release builds use port 8765 (customizable with `--port` flag)
 
 2. **Whitelist System**: 
    - Configurable list of allowed AI CLI tools (claude, gemini, aider, etc.)
@@ -407,9 +408,10 @@ Releases are fully automated using [cargo-dist](https://axodotdev.github.io/carg
 #### Release Process
 
 1. Update version in `Cargo.toml`: `version = "0.0.5"`
-2. Commit changes: `git commit -m "Bump version to 0.0.5"`
-3. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
-4. GitHub Actions automatically:
+2. Run `cargo build` to update `Cargo.lock` with new version
+3. Commit changes: `git commit -m "Bump version to 0.0.5"`
+4. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
+5. GitHub Actions automatically:
    - Builds binaries for all platforms (macOS, Linux ARM64/x64)
    - Creates GitHub Release with artifacts
    - Publishes to Homebrew tap (`codemuxlab/homebrew-tap`)

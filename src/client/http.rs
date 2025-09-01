@@ -554,7 +554,7 @@ impl SessionConnection {
 
                 sleep(delay_with_jitter).await;
 
-                let ws_url = format!("ws://localhost:8765/ws/{}", session_id);
+                let ws_url = format!("ws://localhost:{}/ws/{}", crate::core::config::default_server_port(), session_id);
                 match connect_async(&ws_url).await {
                     Ok((new_ws, _)) => {
                         tracing::info!(
