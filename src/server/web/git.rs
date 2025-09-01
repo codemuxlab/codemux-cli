@@ -84,12 +84,26 @@ pub async fn get_git_file_diff(
 
 // Helper functions
 async fn get_session_working_dir(session_id: &str, state: &AppState) -> Option<String> {
-    // For run mode, use current directory
-    // Get session working directory from session manager
-    let _session_info = state.session_manager.get_session(session_id).await?;
-    // TODO: Get actual working directory from session info
-    // For now, return current directory
-    Some(std::env::current_dir().ok()?.to_string_lossy().to_string())
+    // Get session info from session manager
+    let session_info = state.session_manager.get_session(session_id).await?;
+    
+    // Get the project ID from the session
+    let project_id = session_info.attributes?.project?;
+    
+    // Get all projects to find the one matching our project_id
+    let projects = state.session_manager.list_projects().await;
+    
+    // Find the project with the matching ID and return its path
+    for project in projects {
+        if project.id == project_id {
+            return project.attributes?.path.into();
+        }
+    }
+    
+    // Fallback to current directory if project not found
+    std::env::current_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 async fn execute_git_status(
