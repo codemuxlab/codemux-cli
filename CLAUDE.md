@@ -290,6 +290,7 @@ pub struct GridCell {
 - **Cross-platform**: Works on web browsers via React Native Web
 - **Debug Capture**: Session recording and analysis for troubleshooting
 - **Terminal Scrollback**: Full scrollback buffer support with mouse wheel and scroll events
+- **React Native Reusables**: Full component library setup with shadcn/ui design system for React Native
 
 ### Terminal Scrollback Implementation
 CodeMux provides full terminal scrollback functionality that allows users to scroll through terminal history, essential for reviewing command output, logs, and debugging information.
@@ -347,6 +348,48 @@ type GridUpdateMessage = {
 ```
 
 This implementation provides proper terminal multiplexer scrollback behavior while maintaining type safety and performance.
+
+### React Native Reusables Component System
+The React Native app uses React Native Reusables, which provides shadcn/ui components optimized for React Native development.
+
+#### Setup Features
+- **CSS Variables**: Complete light/dark theme system with HSL color variables
+- **NativeWind Integration**: Tailwind CSS v3 with React Native optimizations
+- **Portal System**: `@rn-primitives/portal` for overlay components (dropdowns, tooltips, etc.)
+- **Type Safety**: Full TypeScript integration with `clsx` and `tailwind-merge`
+- **Path Aliases**: `@/*` mapping for clean imports
+- **Utility Functions**: `cn()` helper for conditional className merging
+
+#### Installation Command
+```bash
+npx @react-native-reusables/cli@latest add [component-name]
+```
+
+#### Available Components
+- **Layout**: Accordion, Card, Separator, Tabs, Aspect Ratio
+- **Forms**: Input, Textarea, Button, Checkbox, Radio Group, Select, Switch, Toggle, Toggle Group, Label
+- **Feedback**: Alert, Alert Dialog, Badge, Progress, Skeleton, Tooltip
+- **Navigation**: Context Menu, Dialog, Dropdown Menu, Hover Card, Menubar, Popover
+- **Data Display**: Avatar, Text
+- **Utility**: Collapsible
+
+#### Configuration Files
+- **Global Styles**: `app/src/global.css` - CSS variables and Tailwind directives
+- **Tailwind Config**: `app/tailwind.config.js` - Theme colors, animations, border radius
+- **Components Config**: `app/components.json` - CLI tool configuration
+- **Theme Integration**: `app/src/lib/theme.ts` - React Navigation theme mapping
+- **Utilities**: `app/src/lib/utils.ts` - `cn()` className helper
+
+#### Directory Structure
+```
+app/src/
+├── components/ui/     # Generated component files
+├── lib/
+│   ├── theme.ts      # React Navigation themes
+│   └── utils.ts      # Utility functions
+├── hooks/            # Custom hooks
+└── global.css        # Global styles and CSS variables
+```
 
 ## Release Process
 
