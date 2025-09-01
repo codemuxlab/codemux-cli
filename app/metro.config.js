@@ -10,4 +10,4 @@ config.resolver = {
 	unstable_conditionNames: ["browser", "require", "react-native"],
 };
 
-module.exports = withNativeWind(config, { input: "./src/global.css" });
+module.exports = withNativeWind(config, { input: "./src/global.css", inlineRem: 16 });
