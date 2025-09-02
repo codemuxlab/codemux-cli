@@ -63,6 +63,16 @@ Stop the running server.
 codemux server stop
 ```
 
+#### `codemux server restart`
+
+Restart the server (stop and start).
+
+```bash
+codemux server restart
+```
+
+This command automatically uses the previously configured port from the last server start.
+
 ## Session Management
 
 ### `codemux attach <session-id>`
@@ -95,6 +105,16 @@ Terminate a specific session.
 ```bash
 codemux kill-session abc123def
 ```
+
+### `codemux restart`
+
+Restart the server using stored configuration.
+
+```bash
+codemux restart
+```
+
+This is a convenient shortcut that automatically restarts the server with the previously saved port configuration.
 
 ## Project Management
 
@@ -170,6 +190,23 @@ This allows running both debug and release versions simultaneously. Override wit
 codemux server start --port 9000
 ```
 
+### Port Persistence
+
+When you start a server with a specific port, CodeMux automatically saves this configuration for future restarts:
+
+```bash
+# Start server on custom port
+codemux server start --port 9000
+
+# Later, restart will automatically use port 9000
+codemux restart
+codemux server restart
+```
+
+Port configurations are stored separately for debug and release builds in:
+- Debug: `~/.config/dev.codemux.cli/debug_port`
+- Release: `~/.config/dev.codemux.cli/release_port`
+
 ## Examples
 
 ### Basic Workflow
@@ -189,6 +226,9 @@ codemux list
 
 # Attach to a session from another terminal
 codemux attach <session-id>
+
+# Restart server when needed
+codemux restart
 ```
 
 ### Development Workflow
