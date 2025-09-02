@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 ### Changed
+
+### Fixed
+
+
+## [0.1.8] - 2025-09-02
+
+### Added
+
+### Changed
 - Simplified installation scripts to use official cargo-dist installers
 - Installation scripts now automatically detect and use latest version
 
