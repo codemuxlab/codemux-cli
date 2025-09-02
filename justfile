@@ -71,7 +71,7 @@ run *args:
 
 # Run with debug logging
 run-debug:
-    cargo run --bin codemux -- run claude --debug
+    RUST_LOG=debug cargo run --bin codemux -- run claude
 
 # Quick development iteration with file watching
 watch:

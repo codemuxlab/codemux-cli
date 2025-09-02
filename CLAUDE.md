@@ -29,7 +29,7 @@ just capture             # Build capture binary only (fast)
 # Run commands  
 just dev                 # Development workflow - debug mode (fast startup)
 just run                 # Production workflow - release mode (includes React app automatically)
-just run-debug           # Run with debug logging
+just run-debug           # Run with debug logging (RUST_LOG=debug)
 just server              # Start server mode
 
 # Capture system
@@ -65,8 +65,9 @@ SKIP_WEB_BUILD=1 cargo build --bin codemux-capture  # Capture binary only
 # Run
 cargo run --bin codemux                  # Development run mode (debug, no React app by default)
 cargo run --release --bin codemux       # Production run mode (includes React app automatically)
-cargo run --bin codemux -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
-cargo run --bin codemux -- server start # Server mode
+cargo run --bin codemux -- run claude --logfile debug.log  # Run with logging to file
+RUST_LOG=debug cargo run --bin codemux -- server start     # Server with debug logging
+cargo run --bin codemux -- server start 2> server.log      # Server with stderr redirected to file
 
 # Capture system
 SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
@@ -189,7 +190,10 @@ When implementing features, consider using:
   - **Web UI Scaling**: Implements proper scaling with `translate()` + `scale()` transforms, dimension validation, and centering
   - **Resize Handling**: Clear transforms during resize operations to prevent conflicts, use proper timing with requestAnimationFrame
 - **Process Management**: Properly handle SIGTERM/SIGINT for graceful shutdown
-- **Debug Logging**: In debug mode (`--debug` flag), all tracing output is written to `/tmp/codemux-debug.log` to avoid interfering with TUI display. In normal mode, only ERROR level messages are logged and discarded.
+- **Logging**: 
+  - **Server mode**: Logs to stderr by default. Use `RUST_LOG=debug` for verbose output or redirect stderr to a file
+  - **TUI mode**: Uses special writer to avoid interfering with terminal display. Use `--logfile` flag to write logs to a file
+  - **Log levels**: Control with `RUST_LOG` environment variable (e.g., `RUST_LOG=debug`, `RUST_LOG=codemux=trace`)
 - **Output to Terminal**: Use `eprintln!` instead of `println!` to avoid interfering with the TUI display. The TUI uses stdout for rendering, so any `println!` calls will corrupt the display. Use `eprintln!` for debugging or error messages that need to go to stderr.
 
 ### Session Continuity (`--continue` flag)

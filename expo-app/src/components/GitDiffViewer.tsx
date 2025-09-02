@@ -74,7 +74,9 @@ export default function GitDiffViewer({ sessionId }: GitDiffViewerProps) {
 	if (isLoading) {
 		return (
 			<View className="flex-1 bg-background p-4">
-				<Text className="text-foreground text-center">Loading git status...</Text>
+				<Text className="text-foreground text-center">
+					Loading git status...
+				</Text>
 			</View>
 		);
 	}
@@ -103,7 +105,9 @@ export default function GitDiffViewer({ sessionId }: GitDiffViewerProps) {
 				<View className="flex-row items-center mb-4">
 					<Text className="text-green-500 text-lg">✓ Working tree clean</Text>
 					{gitStatus.branch && (
-						<Text className="text-muted-foreground ml-2">({gitStatus.branch})</Text>
+						<Text className="text-muted-foreground ml-2">
+							({gitStatus.branch})
+						</Text>
 					)}
 				</View>
 				<Text className="text-muted-foreground">No changes to display</Text>
@@ -118,7 +122,9 @@ export default function GitDiffViewer({ sessionId }: GitDiffViewerProps) {
 				<View className="flex-row items-center justify-between">
 					<View className="flex-row items-center">
 						{gitStatus?.branch && (
-							<Text className="text-foreground text-sm">📍 {gitStatus.branch}</Text>
+							<Text className="text-foreground text-sm">
+								📍 {gitStatus.branch}
+							</Text>
 						)}
 						<Text className="text-muted-foreground text-sm ml-4">
 							{gitStatus?.files.length || 0} files changed

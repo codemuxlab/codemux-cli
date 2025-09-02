@@ -1,3 +1,4 @@
+import { useColorScheme } from "nativewind";
 import type React from "react";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -57,6 +58,7 @@ TerminalGrid.displayName = "TerminalGrid";
 const TerminalInput = memo(
 	({ onSubmit }: { onSubmit: (text: string) => void }) => {
 		const [inputValue, setInputValue] = useState("");
+		const { colorScheme } = useColorScheme();
 
 		const handleSubmit = useCallback(() => {
 			if (inputValue.trim()) {
@@ -65,21 +67,24 @@ const TerminalInput = memo(
 			}
 		}, [inputValue, onSubmit]);
 
+		// Define placeholder color based on theme
+		const placeholderColor = colorScheme === "dark" ? "#737373" : "#9ca3af";
+
 		return (
-			<View className="flex-row p-2 bg-gray-800 items-center">
+			<View className="flex-row p-2 bg-background border-t border-border items-center">
 				<TextInput
-					className="flex-1 bg-white text-black p-2 font-mono text-sm mr-2 rounded"
+					className="flex-1 bg-card text-foreground p-2 font-mono text-sm mr-2 rounded-md border border-border"
 					value={inputValue}
 					onChangeText={setInputValue}
 					onSubmitEditing={handleSubmit}
 					placeholder="Type your input here..."
-					placeholderTextColor="#666666"
+					placeholderTextColor={placeholderColor}
 					multiline={false}
 					returnKeyType="send"
 					autoCorrect={false}
 					autoCapitalize="none"
 				/>
-				<Text className="text-white text-xs bg-gray-600 p-1 rounded">
+				<Text className="text-muted-foreground text-xs bg-muted px-2 py-1 rounded">
 					Enter to send
 				</Text>
 			</View>
@@ -185,6 +190,18 @@ ThemeSelector.displayName = "ThemeSelector";
 export default function Terminal({ sessionId }: TerminalProps) {
 	const scrollViewRef = useRef<ScrollView>(null);
 	const terminalRef = useRef<View>(null);
+	const { colorScheme } = useColorScheme();
+	const setTheme = useTerminalStore((state) => state.setTheme);
+
+	// Sync terminal theme with app color scheme
+	useEffect(() => {
+		const targetTheme =
+			colorScheme === "dark"
+				? availableThemes.find((t) => t.name === "Default Dark") ||
+					availableThemes[0]
+				: availableThemes.find((t) => t.name === "Light") || availableThemes[1];
+		setTheme(targetTheme);
+	}, [colorScheme, setTheme]);
 
 	const handleWebSocketMessage = useCallback((event: MessageEvent) => {
 		try {
