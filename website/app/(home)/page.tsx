@@ -71,11 +71,11 @@ export default function HomePage() {
             <h3 className="mb-4 text-lg font-semibold">Run your AI assistant</h3>
             <pre className="overflow-x-auto rounded-md border border-fd-border bg-fd-card p-4">
               <code className="text-sm">{`# Quick mode - launch immediately
-codemux run claude
+codemux claude
 
 # Server mode - manage multiple sessions
 codemux server start
-codemux run claude --open  # Opens web UI`}</code>
+codemux claude --open  # Opens web UI`}</code>
             </pre>
           </div>
           
@@ -103,7 +103,7 @@ codemux run claude --open  # Opens web UI`}</code>
                 Launch a single AI session immediately. Perfect for quick tasks and focused work.
               </p>
               <pre className="rounded-md border border-fd-border bg-fd-card p-3">
-                <code className="text-sm">codemux run claude</code>
+                <code className="text-sm">codemux claude</code>
               </pre>
             </div>
             

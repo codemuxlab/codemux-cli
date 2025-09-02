@@ -178,7 +178,7 @@ function Install-Main {
         Write-Success "CodeMux is ready to use!"
         Write-Host ""
         Write-Host "Get started:"
-        Write-Host "  codemux run claude              # Quick mode"
+        Write-Host "  codemux claude                  # Quick mode"
         Write-Host "  codemux server start           # Server mode" 
         Write-Host "  codemux --help                 # See all commands"
         Write-Host ""

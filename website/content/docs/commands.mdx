@@ -9,12 +9,12 @@ Complete reference for all CodeMux CLI commands and options.
 
 ## Global Commands
 
-### `codemux run <agent> [args]`
+### `codemux <agent> [args]`
 
 Launch an AI agent in quick mode.
 
 ```bash
-codemux run claude [options]
+codemux claude [options]
 ```
 
 **Options:**
@@ -125,10 +125,10 @@ The `--continue` flag automatically finds and resumes the most recent conversati
 
 ```bash
 # Start a new Claude session
-codemux run claude
+codemux claude
 
 # Later, continue where you left off
-codemux run claude --continue
+codemux claude --continue
 ```
 
 This scans `~/.claude/projects/` for the most recently modified `.jsonl` file and resumes that conversation.
@@ -154,7 +154,7 @@ For debugging, redirect logs to a file:
 codemux server start 2> server.log
 
 # TUI mode - use --logfile
-codemux run claude --logfile debug.log
+codemux claude --logfile debug.log
 ```
 
 ## Port Configuration
@@ -182,7 +182,7 @@ codemux server start
 codemux add-project ~/my-project
 
 # Start Claude with web UI
-codemux run claude --open
+codemux claude --open
 
 # List sessions
 codemux list
@@ -198,10 +198,10 @@ codemux attach <session-id>
 RUST_LOG=debug codemux server start
 
 # Run Claude with log file
-codemux run claude --logfile session.log
+codemux claude --logfile session.log
 
 # Continue previous session
-codemux run claude --continue
+codemux claude --continue
 ```
 
 ### Multiple Projects
@@ -213,8 +213,8 @@ codemux add-project ~/project2 --name "Backend"
 codemux add-project ~/project3 --name "Docs"
 
 # Start sessions for each
-codemux run claude --project ~/project1
-codemux run claude --project ~/project2
+codemux claude --project ~/project1
+codemux claude --project ~/project2
 
 # List all active sessions
 codemux list

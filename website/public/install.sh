@@ -180,7 +180,7 @@ main() {
         success "CodeMux is ready to use!"
         echo
         echo "Get started:"
-        echo "  codemux run claude              # Quick mode"
+        echo "  codemux claude                  # Quick mode"
         echo "  codemux server start           # Server mode"
         echo "  codemux --help                 # See all commands"
         echo
