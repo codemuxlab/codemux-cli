@@ -8,8 +8,8 @@ export default function HomePage() {
     <main className="flex flex-1 flex-col">
       {/* Hero Section */}
       <section className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="mb-4 inline-flex items-center rounded-lg bg-fd-muted px-3 py-1 text-sm">
-          <span className="text-fd-muted-foreground">🚀 Now with Claude Code support</span>
+        <div className="mb-4 inline-flex items-center rounded-lg border border-fd-border bg-fd-secondary px-3 py-1 text-sm">
+          <span className="text-fd-secondary-foreground">🚀 Now with Claude Code support</span>
         </div>
         
         <h1 className="mb-6 text-5xl font-bold tracking-tight md:text-6xl">
@@ -69,7 +69,7 @@ export default function HomePage() {
 
           <div className="mt-6 rounded-lg border border-fd-border bg-fd-card p-6">
             <h3 className="mb-4 text-lg font-semibold">Run your AI assistant</h3>
-            <pre className="overflow-x-auto rounded-md bg-fd-muted p-4">
+            <pre className="overflow-x-auto rounded-md border border-fd-border bg-fd-card p-4">
               <code className="text-sm">{`# Quick mode - launch immediately
 codemux run claude
 
@@ -102,7 +102,7 @@ codemux run claude --open  # Opens web UI`}</code>
               <p className="mb-4 text-fd-muted-foreground">
                 Launch a single AI session immediately. Perfect for quick tasks and focused work.
               </p>
-              <pre className="rounded-md bg-fd-muted p-3">
+              <pre className="rounded-md border border-fd-border bg-fd-card p-3">
                 <code className="text-sm">codemux run claude</code>
               </pre>
             </div>
@@ -112,7 +112,7 @@ codemux run claude --open  # Opens web UI`}</code>
               <p className="mb-4 text-fd-muted-foreground">
                 Background service managing multiple project sessions. Ideal for complex workflows.
               </p>
-              <pre className="rounded-md bg-fd-muted p-3">
+              <pre className="rounded-md border border-fd-border bg-fd-card p-3">
                 <code className="text-sm">codemux server start</code>
               </pre>
             </div>

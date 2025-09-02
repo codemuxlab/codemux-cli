@@ -101,11 +101,11 @@ export function InstallationTabs() {
           Alternative Methods
         </h4>
         <div className="space-y-2 text-sm">
-          <div className="flex items-center justify-between rounded-md bg-fd-muted/50 px-3 py-2">
+          <div className="flex items-center justify-between rounded-md border border-fd-border bg-fd-secondary px-3 py-2">
             <span>Homebrew (macOS/Linux)</span>
             <code className="text-xs">brew install codemuxlab/tap/codemux</code>
           </div>
-          <div className="flex items-center justify-between rounded-md bg-fd-muted/50 px-3 py-2">
+          <div className="flex items-center justify-between rounded-md border border-fd-border bg-fd-secondary px-3 py-2">
             <span>npm (Node.js)</span>
             <code className="text-xs">npm install codemux@latest</code>
           </div>

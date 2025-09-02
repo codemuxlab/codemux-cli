@@ -70,7 +70,7 @@ export function SmartInstallButton() {
     <div className="flex flex-col gap-3">
       {isUnixPlatform ? (
         <>
-          <div className="flex items-center gap-2 rounded-lg bg-fd-muted p-3">
+          <div className="flex items-center gap-2 rounded-lg border border-fd-border bg-fd-secondary p-3">
             <code className="flex-1 text-sm text-fd-foreground">{installCommand}</code>
             <button
               onClick={handleClick}
