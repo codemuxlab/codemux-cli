@@ -8,14 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Server restart command (`codemux restart` and `codemux server restart`) for convenient server management
-- Expo app now uses port 18765 in development mode to match debug build configuration
 
 ### Changed
 
 ### Fixed
+
+## [0.1.9] - 2025-09-02
+
+### Added
+- Server restart command (`codemux restart` and `codemux server restart`) for convenient server management
+- Automatic port persistence - server saves and reuses port configuration across restarts
+- Expo app now uses port 18765 in development mode to match debug build configuration
+
+### Changed
 - Updated app identifier from `com.codemux.codemux` to `dev.codemux.cli` for proper configuration directory structure
 
+### Fixed
 
 ## [0.1.8] - 2025-09-02
 
