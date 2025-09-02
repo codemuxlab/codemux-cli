@@ -15,7 +15,7 @@ interface InstallCommand {
 const installCommands: InstallCommand[] = [
   {
     platform: 'unix',
-    title: 'macOS / Linux',
+    title: 'macOS / Linux / WSL',
     command: 'curl -sSf https://codemux.dev/install.sh | sh',
     icon: <Apple className="h-4 w-4" />,
   },
@@ -102,7 +102,7 @@ export function InstallationTabs() {
         </h4>
         <div className="space-y-2 text-sm">
           <div className="flex items-center justify-between rounded-md border border-fd-border bg-fd-secondary px-3 py-2">
-            <span>Homebrew (macOS/Linux)</span>
+            <span>Homebrew (macOS/Linux/WSL)</span>
             <code className="text-xs">brew install codemuxlab/tap/codemux</code>
           </div>
           <div className="flex items-center justify-between rounded-md border border-fd-border bg-fd-secondary px-3 py-2">

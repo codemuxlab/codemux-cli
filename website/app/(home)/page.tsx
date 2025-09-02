@@ -22,7 +22,7 @@ export default function HomePage() {
         <p className="mb-8 max-w-2xl text-lg text-fd-muted-foreground">
           CodeMux is a specialized terminal multiplexer designed for "vibe coding" - 
           letting AI assistants like Claude, Gemini, and Aider drive your development 
-          with enhanced web UI support.
+          with enhanced web UI support. Works on macOS, Linux, and WSL.
         </p>
         
         <div className="flex justify-center">
