@@ -411,14 +411,73 @@ Releases are fully automated using [cargo-dist](https://axodotdev.github.io/carg
 
 #### Release Process
 
-1. Update version in `Cargo.toml`: `version = "0.0.5"`
-2. Run `cargo build` to update `Cargo.lock` with new version
-3. Commit changes: `git commit -m "Bump version to 0.0.5"`
-4. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
-5. GitHub Actions automatically:
+1. **Update CHANGELOG.md**: Add release notes under "Unreleased" section (see Changelog Guidelines below)
+2. Update version in `Cargo.toml`: `version = "0.0.5"`
+3. Run `cargo build` to update `Cargo.lock` with new version
+4. Commit changes: `git commit -m "Bump version to 0.0.5"`
+5. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
+6. GitHub Actions automatically:
    - Builds binaries for all platforms (macOS, Linux ARM64/x64)
-   - Creates GitHub Release with artifacts
+   - Creates GitHub Release with artifacts (includes changelog content)
    - Publishes to Homebrew tap (`codemuxlab/homebrew-tap`)
+
+#### Changelog Guidelines
+
+CodeMux uses **Keep a Changelog** format with cargo-dist integration:
+
+**File Location**: `CHANGELOG.md` in repository root
+
+**Format Structure**:
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- New features go here
+
+### Changed
+- Changes to existing functionality
+
+### Fixed
+- Bug fixes
+
+## [0.1.5] - 2024-09-02
+
+### Added
+- WSL support for installation scripts
+- Smart platform detection for install commands
+
+### Fixed
+- Installation script redirect handling
+- Shell compatibility issues with echo commands
+```
+
+**Section Types** (use only when applicable):
+- **Added**: New features
+- **Changed**: Changes in existing functionality  
+- **Deprecated**: Soon-to-be removed features
+- **Removed**: Removed features
+- **Fixed**: Bug fixes
+- **Security**: Vulnerability fixes
+
+**Key Rules**:
+1. **Never edit "Unreleased" heading** - cargo-dist updates it automatically during releases
+2. **Date format**: Use ISO 8601 (`YYYY-MM-DD`)
+3. **Version links**: Include semantic version numbers in square brackets
+4. **Human-readable**: Write for users, not just developers
+5. **Grouping**: Group similar changes together
+6. **Chronological order**: Newest releases first
+
+**Integration with cargo-dist**:
+- cargo-dist automatically parses CHANGELOG.md and includes relevant sections in GitHub releases
+- The "Unreleased" section is transformed into the version section during release
+- Release notes from CHANGELOG.md appear in GitHub release descriptions
 
 #### cargo-dist Configuration
 
