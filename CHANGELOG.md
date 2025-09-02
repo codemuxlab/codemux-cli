@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+
+## [0.1.7] - 2025-09-02
+
+### Added
 - WSL support documentation and installation compatibility
 - Smart platform-aware installation button with inline copy functionality
 - Installation scripts with automatic latest version detection

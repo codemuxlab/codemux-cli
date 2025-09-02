@@ -21,8 +21,6 @@ pre-release-replacements = [
 # Allow working with uncommitted changes during release process
 # Note: cargo-release will commit the changes automatically
 
-# Sign tags for security
-sign-tag = true
-
-# Sign commits for security  
-sign-commit = true
+# Disable signing for now (GPG not configured)
+sign-tag = false
+sign-commit = false
