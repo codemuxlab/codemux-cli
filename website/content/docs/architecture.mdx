@@ -1,0 +1,288 @@
+---
+title: Architecture
+description: Understanding CodeMux's internal architecture and design
+---
+
+# Architecture
+
+CodeMux is built with a modular, channel-based architecture that enables flexible terminal multiplexing for AI coding assistants.
+
+## System Overview
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   CLI/TUI   │     │   Web UI    │     │ React Native│
+└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+       │                   │                    │
+       └───────────────────┼────────────────────┘
+                          │
+                    ┌─────▼─────┐
+                    │  Channels  │
+                    │   (I/O)    │
+                    └─────┬─────┘
+                          │
+                    ┌─────▼─────┐
+                    │PTY Session │
+                    │  Manager   │
+                    └─────┬─────┘
+                          │
+                    ┌─────▼─────┐
+                    │ AI Agents  │
+                    │(Whitelisted)│
+                    └────────────┘
+```
+
+## Core Components
+
+### 1. PTY Session Management
+
+The heart of CodeMux is the PTY (pseudo-terminal) session manager:
+
+- **Independence**: PTY sessions are standalone components, not owned by TUI or web server
+- **Process Lifecycle**: Manages subprocess creation, I/O handling, and termination
+- **VT100 Parser**: Full terminal emulation with scrollback buffer support
+- **Grid State**: Maintains terminal grid state for efficient updates
+
+```rust
+pub struct PtySession {
+    pty: Arc<Mutex<Box<dyn MasterPty>>>,
+    parser: Arc<Mutex<vt100::Parser>>,
+    channels: PtyChannels,
+    // ...
+}
+```
+
+### 2. Channel Architecture
+
+CodeMux uses a channel-based architecture for communication:
+
+- **Input Channel**: Receives keystrokes, commands, and control sequences
+- **Output Channel**: Broadcasts PTY output to all connected clients
+- **Control Channel**: Handles resize events and session control
+- **Grid Channel**: Sends optimized grid updates (keyframes and diffs)
+
+```rust
+pub struct PtyChannels {
+    pub input_tx: mpsc::UnboundedSender<PtyInput>,
+    pub output_rx: broadcast::Receiver<Vec<u8>>,
+    pub grid_rx: broadcast::Receiver<GridUpdateMessage>,
+    pub control_tx: mpsc::UnboundedSender<PtyControl>,
+}
+```
+
+### 3. Client Architecture
+
+Multiple client types can connect to PTY sessions:
+
+#### TUI Client
+- Sends complete input stream (keystrokes, control sequences)
+- Renders terminal grid directly
+- Handles mouse events and scrolling
+- Full terminal emulation
+
+#### Web UI Client
+- Translates web interactions to terminal sequences
+- Receives grid updates via WebSocket
+- Provides native HTML components for prompts
+- Supports scaling and responsive design
+
+#### React Native Client
+- Mobile-optimized interface
+- Touch-friendly interactions
+- Cross-platform support (iOS/Android)
+- Gesture-based navigation
+
+### 4. Grid Update System
+
+Efficient terminal state synchronization:
+
+```rust
+pub enum GridUpdateMessage {
+    Keyframe {
+        size: (u16, u16),
+        cells: Vec<GridCell>,
+        cursor: (u16, u16),
+        cursor_visible: bool,
+        // ...
+    },
+    Diff {
+        cells: Vec<CellUpdate>,
+        cursor: Option<(u16, u16)>,
+        cursor_visible: Option<bool>,
+        // ...
+    }
+}
+```
+
+- **Keyframes**: Complete terminal state snapshots
+- **Diffs**: Incremental updates for efficiency
+- **Compression**: Only sends changed cells
+- **Cursor Tracking**: Maintains cursor position and visibility
+
+## Operating Modes
+
+### Quick Mode
+
+Direct PTY session creation:
+
+1. CLI launches AI agent directly
+2. Creates local PTY session
+3. TUI connects via local channels
+4. Optional web UI via embedded server
+
+### Server Mode
+
+Background service with persistent sessions:
+
+1. Server daemon manages multiple sessions
+2. Sessions persist across client disconnections
+3. WebSocket connections for remote access
+4. REST API for session management
+
+## Security Model
+
+### Whitelist System
+
+```toml
+[whitelist]
+agents = ["claude", "gemini", "aider"]
+```
+
+- Only whitelisted commands can be executed
+- Prevents arbitrary command injection
+- Configurable per deployment
+
+### Process Isolation
+
+- Each session runs in separate process
+- PTY provides natural isolation boundary
+- No direct filesystem access from web
+
+## Data Flow
+
+### Input Processing
+
+1. **User Input** → Client (TUI/Web/Mobile)
+2. **Client Processing** → Format as PtyInput
+3. **Channel Transmission** → Input channel
+4. **PTY Write** → Send to subprocess
+5. **AI Processing** → Agent receives input
+
+### Output Processing
+
+1. **AI Output** → Subprocess stdout/stderr
+2. **PTY Read** → Capture output bytes
+3. **VT100 Parsing** → Update terminal state
+4. **Grid Generation** → Create update messages
+5. **Broadcast** → Send to all clients
+6. **Client Rendering** → Display to user
+
+## Performance Optimizations
+
+### Efficient Updates
+
+- Diff-based updates reduce bandwidth
+- Batched processing for rapid output
+- Lazy grid calculation
+- Client-side caching
+
+### Memory Management
+
+- Bounded scrollback buffer (10,000 lines)
+- Automatic session cleanup
+- Reference counting for shared resources
+
+### Concurrency
+
+- Tokio async runtime
+- Lock-free broadcast channels
+- Parallel client handling
+- Non-blocking I/O throughout
+
+## Storage Architecture
+
+### Session Persistence
+
+```
+~/.local/share/codemux/
+├── sessions/
+│   ├── session-abc123.json
+│   └── session-def456.json
+├── projects.db
+└── server.pid
+```
+
+### JSONL Conversation Logs
+
+```
+~/.claude/projects/
+└── project-xyz/
+    └── conversation-2024-01-01.jsonl
+```
+
+## WebSocket Protocol
+
+### Message Types
+
+```typescript
+type ServerMessage = 
+  | { type: "grid_update", Keyframe: {...} }
+  | { type: "grid_update", Diff: {...} }
+  | { type: "output", data: string }
+  | { type: "exit", code: number };
+
+type ClientMessage =
+  | { type: "input", data: string }
+  | { type: "resize", rows: number, cols: number }
+  | { type: "scroll", direction: "up" | "down", lines: number };
+```
+
+## Build System
+
+### Conditional Compilation
+
+```rust
+// Different ports for debug/release
+pub fn default_server_port() -> u16 {
+    if cfg!(debug_assertions) { 18765 } else { 8765 }
+}
+```
+
+### Web App Integration
+
+- Automatically built during release compilation
+- Embedded as static resources
+- Optional build flags for development
+
+## Testing Architecture
+
+### Unit Tests
+- Component isolation
+- Channel communication
+- Parser accuracy
+
+### Integration Tests
+- End-to-end session creation
+- Client connection handling
+- Command execution
+
+### Capture System
+- Record sessions to JSONL
+- Replay for debugging
+- Performance analysis
+
+## Future Architecture Considerations
+
+### Planned Enhancements
+
+1. **Distributed Sessions**: Sessions across multiple machines
+2. **Plugin System**: Extensible agent support
+3. **Cloud Sync**: Session backup and sharing
+4. **Collaborative Editing**: Multiple users per session
+
+### Scalability
+
+- Horizontal scaling for server mode
+- Session migration between servers
+- Load balancing for web clients
+- Optimized binary protocol

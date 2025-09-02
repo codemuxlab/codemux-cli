@@ -1,0 +1,103 @@
+---
+title: Getting Started
+description: Quick start guide for CodeMux - Terminal Multiplexer for AI Coding
+---
+
+import { Cards, Card } from 'fumadocs-ui/components/card';
+
+# Welcome to CodeMux
+
+CodeMux is a specialized terminal multiplexer designed for **"vibe coding"** - a development approach where LLMs are the primary driver of code generation rather than direct typing.
+
+## What makes CodeMux different?
+
+Unlike generic terminal multiplexers, CodeMux is purpose-built for AI-assisted development:
+
+- **🔒 Security First**: Only runs whitelisted AI code agents (claude, gemini, aider, etc.)
+- **🎯 Smart Prompts**: Detects and intercepts interactive prompts to provide native web UI components
+- **🌐 Rich Interfaces**: Provides web UIs instead of raw terminal emulation
+- **📱 Mobile Ready**: React Native support enables coding from phones and tablets
+
+## Installation
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew install codemuxlab/tap/codemux
+```
+
+### From Source
+
+```bash
+git clone https://github.com/codemuxlab/codemux-cli
+cd codemux-cli
+cargo build --release
+```
+
+## Quick Start
+
+### Quick Mode
+Launch a single AI session immediately:
+
+```bash
+# Start Claude
+codemux run claude
+
+# Continue from previous session
+codemux run claude --continue
+
+# Open with web interface
+codemux run claude --open
+```
+
+### Server Mode
+Run as a background service managing multiple sessions:
+
+```bash
+# Start the server
+codemux server start
+
+# Add a project
+codemux add-project /path/to/project
+
+# List active sessions
+codemux list
+
+# Attach to a session
+codemux attach <session-id>
+```
+
+## Key Features
+
+### Session Management
+- Multiple concurrent AI sessions
+- Project-based organization
+- Session persistence and reconnection
+- Automatic session recovery with `--continue` flag
+
+### Web Interface
+- Real-time terminal emulation with VT100 parser
+- Native HTML components for prompts
+- Git integration with diff viewer
+- Project and session management UI
+
+### Cross-Platform Support
+- macOS (Intel & ARM)
+- Linux (x64 & ARM64)
+- Web browsers via React app
+- Mobile devices via React Native
+
+## Next Steps
+
+<Cards>
+  <Card title="Configuration" href="/docs/configuration" description="Customize CodeMux settings and whitelist" />
+  <Card title="Commands" href="/docs/commands" description="Complete CLI command reference" />
+  <Card title="Architecture" href="/docs/architecture" description="Understanding CodeMux internals" />
+  <Card title="Development" href="/docs/development" description="Contributing and building from source" />
+</Cards>
+
+## Getting Help
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/codemuxlab/codemux-cli/issues)
+- **Discussions**: [Ask questions and share tips](https://github.com/codemuxlab/codemux-cli/discussions)
+- **Documentation**: You're already here! Browse the sidebar for more topics.

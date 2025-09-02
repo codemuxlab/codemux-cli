@@ -1,0 +1,230 @@
+---
+title: Configuration
+description: How to configure CodeMux settings and customize behavior
+---
+
+# Configuration
+
+CodeMux can be configured through configuration files and environment variables.
+
+## Configuration File
+
+CodeMux looks for configuration in platform-specific locations:
+
+- **macOS**: `~/Library/Application Support/codemux/config.toml`
+- **Linux**: `~/.config/codemux/config.toml`
+- **Windows**: `%APPDATA%\codemux\config.toml`
+
+### Basic Configuration
+
+```toml
+[whitelist]
+agents = ["claude", "gemini", "aider", "cursor", "continue"]
+
+[server]
+port = 8765
+data_dir = "~/.local/share/codemux"
+pid_file = "~/.local/share/codemux/server.pid"
+
+[web]
+static_dir = "/opt/codemux/web"
+```
+
+## Whitelist Configuration
+
+The whitelist controls which AI agents can be executed. This is a security feature to prevent arbitrary command execution.
+
+### Default Whitelist
+
+By default, CodeMux includes these agents:
+- `claude` - Anthropic's Claude
+- `gemini` - Google's Gemini  
+- `aider` - Aider AI coding assistant
+- `cursor` - Cursor AI
+- `continue` - Continue.dev
+
+### Adding Custom Agents
+
+To add a custom AI agent:
+
+```toml
+[whitelist]
+agents = [
+  "claude",
+  "gemini", 
+  "aider",
+  "my-custom-agent"
+]
+```
+
+## Server Configuration
+
+### Port Settings
+
+Configure the server port:
+
+```toml
+[server]
+port = 9000  # Custom port
+```
+
+Note: Debug builds default to port 18765, release builds to 8765.
+
+### Data Directory
+
+Specify where CodeMux stores its data:
+
+```toml
+[server]
+data_dir = "/custom/path/to/data"
+pid_file = "/custom/path/to/server.pid"
+```
+
+## Web Configuration
+
+### Static Files
+
+If you're building from source, specify the web app directory:
+
+```toml
+[web]
+static_dir = "/path/to/codemux/expo-app/dist"
+```
+
+## Environment Variables
+
+### Logging
+
+Control log verbosity with `RUST_LOG`:
+
+```bash
+# Info level (default)
+RUST_LOG=info codemux server start
+
+# Debug level
+RUST_LOG=debug codemux server start
+
+# Trace level for specific modules
+RUST_LOG=codemux::server=trace,codemux::pty=debug codemux server start
+
+# Silent except errors
+RUST_LOG=error codemux server start
+```
+
+### Build-time Configuration
+
+When building from source:
+
+```bash
+# Force React app build in development mode
+CODEMUX_BUILD_APP=1 cargo build
+
+# Skip web build entirely
+SKIP_WEB_BUILD=1 cargo build
+
+# Custom feature flags
+cargo build --features "feature1,feature2"
+```
+
+## Session Storage
+
+CodeMux stores session data in platform-specific locations:
+
+- **macOS**: `~/Library/Application Support/codemux/`
+- **Linux**: `~/.local/share/codemux/`
+- **Windows**: `%LOCALAPPDATA%\codemux\`
+
+### Session Files
+
+Sessions are stored as:
+- JSONL files for conversation history
+- SQLite database for metadata
+- PID files for process management
+
+## Claude Integration
+
+When using Claude, CodeMux integrates with Claude's project system:
+
+- Sessions are saved to `~/.claude/projects/`
+- JSONL files contain full conversation history
+- Use `--continue` to resume the most recent session
+
+## Advanced Configuration
+
+### Custom Prompt Patterns
+
+For advanced users, you can configure prompt detection patterns:
+
+```toml
+[agents.claude]
+patterns = [
+  "Human:",
+  "Assistant:",
+  "> "
+]
+
+[agents.aider]
+patterns = [
+  ">>",
+  "AI:"
+]
+```
+
+### Terminal Settings
+
+Configure terminal behavior:
+
+```toml
+[terminal]
+rows = 40
+cols = 120
+scrollback = 10000
+```
+
+### Theme Configuration
+
+The web UI supports theme customization:
+
+```toml
+[theme]
+mode = "dark"  # or "light", "auto"
+accent_color = "#0969da"
+```
+
+## Troubleshooting Configuration
+
+### Verify Configuration
+
+Check your current configuration:
+
+```bash
+# Show config file location
+codemux config --show-path
+
+# Validate configuration
+codemux config --validate
+```
+
+### Reset Configuration
+
+Reset to defaults:
+
+```bash
+# Backup current config
+cp ~/.config/codemux/config.toml ~/.config/codemux/config.toml.bak
+
+# Remove config file (will use defaults)
+rm ~/.config/codemux/config.toml
+```
+
+### Debug Configuration Issues
+
+Run with debug logging to see configuration loading:
+
+```bash
+RUST_LOG=codemux::config=debug codemux server start
+```
+
+## Migration from Legacy Format
+
+If you have an older configuration file, CodeMux will automatically migrate it to the new format on first run. The original file is preserved with a `.backup` extension.

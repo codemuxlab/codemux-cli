@@ -1,0 +1,418 @@
+---
+title: Development
+description: Contributing to CodeMux and building from source
+---
+
+# Development
+
+Guide for contributing to CodeMux and building from source.
+
+## Prerequisites
+
+### Required Tools
+
+- **Rust**: 1.70+ with cargo
+- **Node.js**: 18+ with npm
+- **Git**: For cloning the repository
+
+### Optional Tools
+
+- **just**: Command runner for simplified builds
+- **cargo-watch**: For development iteration
+- **cargo-dist**: For release management
+
+## Getting the Source
+
+```bash
+git clone https://github.com/codemuxlab/codemux-cli
+cd codemux-cli
+```
+
+## Project Structure
+
+```
+codemux-cli/
+├── src/                 # Rust source code
+│   ├── cli/            # CLI commands and handlers
+│   ├── client/         # TUI and HTTP clients
+│   ├── core/           # Core types and PTY management
+│   ├── server/         # Server and WebSocket handling
+│   └── capture/        # Session recording system
+├── expo-app/           # React Native app
+│   ├── src/           # TypeScript source
+│   └── components/    # React components
+├── website/            # Documentation site (Fumadocs)
+├── justfile           # Build commands
+└── Cargo.toml         # Rust dependencies
+```
+
+## Building from Source
+
+### Quick Build with Just
+
+```bash
+# Install just (if not already installed)
+cargo install just
+
+# Setup development environment
+just setup
+
+# Build everything
+just build
+
+# Run in development mode
+just dev
+```
+
+### Manual Build
+
+```bash
+# Install dependencies
+cd expo-app && npm install && cd ..
+
+# Build Rust binary (debug)
+cargo build
+
+# Build Rust binary (release with React app)
+cargo build --release
+
+# Build React Native app separately
+cd expo-app && npx expo export
+```
+
+## Development Workflow
+
+### Running in Development
+
+```bash
+# Start with auto-reload
+just watch
+
+# Or manually with debug logging
+RUST_LOG=debug cargo run --bin codemux -- run claude
+
+# Run tests
+just test
+
+# Format and lint
+just fmt
+just clippy
+just lint-all
+```
+
+### React Native Development
+
+```bash
+cd expo-app
+
+# Start development server
+npm run start
+
+# Run on iOS simulator
+npm run ios
+
+# Run on Android emulator
+npm run android
+
+# Run on web
+npm run web
+
+# Lint and fix
+npm run lint
+npm run lint:fix
+```
+
+### Testing
+
+```bash
+# Run all tests
+cargo test
+
+# Run with output
+cargo test -- --nocapture
+
+# Run specific test
+cargo test test_name
+
+# Run integration tests
+cargo test --test integration
+
+# Test React Native app
+cd expo-app && npm test
+```
+
+## Code Style
+
+### Rust Code
+
+- Format with `cargo fmt`
+- Lint with `cargo clippy`
+- Follow Rust API guidelines
+- Document public APIs
+
+### TypeScript/React
+
+- Format with Biome
+- Follow React best practices
+- Use TypeScript strictly
+- Maintain type safety
+
+### Commit Messages
+
+Follow conventional commits:
+
+```
+feat: add new feature
+fix: resolve bug
+docs: update documentation
+refactor: restructure code
+test: add tests
+chore: maintenance tasks
+```
+
+## Adding Features
+
+### 1. Adding a New Command
+
+Create a new command in `src/cli/commands.rs`:
+
+```rust
+#[derive(Subcommand)]
+pub enum Commands {
+    // ... existing commands
+    
+    /// Your new command
+    NewCommand {
+        #[arg(short, long)]
+        option: String,
+    },
+}
+```
+
+Add handler in `src/cli/handlers.rs`:
+
+```rust
+pub async fn handle_new_command(option: String) -> Result<()> {
+    // Implementation
+    Ok(())
+}
+```
+
+### 2. Adding UI Components
+
+For React Native (expo-app):
+
+```tsx
+// src/components/NewComponent.tsx
+export function NewComponent({ prop }: Props) {
+    return (
+        <View>
+            {/* Component JSX */}
+        </View>
+    );
+}
+```
+
+### 3. Adding API Endpoints
+
+In `src/server/web/routes.rs`:
+
+```rust
+pub fn create_router(state: AppState) -> Router {
+    Router::new()
+        // ... existing routes
+        .route("/api/new-endpoint", get(new_handler))
+        .with_state(state)
+}
+
+async fn new_handler(State(state): State<AppState>) -> Result<Json<Response>> {
+    // Implementation
+    Ok(Json(response))
+}
+```
+
+## Debugging
+
+### Debug Logging
+
+```bash
+# Enable debug logging
+RUST_LOG=debug cargo run
+
+# Trace specific modules
+RUST_LOG=codemux::server=trace cargo run
+
+# Log to file
+cargo run --bin codemux -- run claude --logfile debug.log
+```
+
+### Session Capture
+
+Record and analyze sessions:
+
+```bash
+# Record a session
+just capture-record claude session.jsonl
+
+# Analyze the recording
+just capture-analyze session.jsonl
+```
+
+### WebSocket Debugging
+
+Monitor WebSocket traffic:
+
+```bash
+# Use browser dev tools
+# Or wscat for CLI monitoring
+wscat -c ws://localhost:8765/ws/session-id
+```
+
+## TypeScript Bindings
+
+Generate TypeScript types from Rust:
+
+```bash
+# Generate bindings
+just ts-bindings
+
+# Types appear in bindings/ directory
+```
+
+Add `#[derive(TS)]` to Rust structs:
+
+```rust
+use ts_rs::TS;
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MyType {
+    pub field: String,
+}
+```
+
+## Release Process
+
+### Version Bump
+
+1. Update version in `Cargo.toml`
+2. Run `cargo build` to update `Cargo.lock`
+3. Commit changes
+4. Create and push tag
+
+```bash
+# Bump version
+vim Cargo.toml  # Update version
+
+# Build and commit
+cargo build
+git add -A
+git commit -m "Bump version to x.y.z"
+
+# Tag and push
+git tag vx.y.z
+git push origin vx.y.z
+```
+
+### GitHub Actions
+
+Releases are automated via cargo-dist:
+
+1. Push version tag
+2. GitHub Actions builds for all platforms
+3. Creates GitHub release with binaries
+4. Updates Homebrew tap
+
+## Quality Checks
+
+### Pre-commit Checklist
+
+```bash
+# Rust checks
+cargo fmt --check
+cargo clippy
+cargo test
+
+# React Native checks
+cd expo-app
+npm run lint
+npm run typecheck
+
+# Documentation
+cd website
+npm run lint
+```
+
+### CI Pipeline
+
+The CI runs:
+- Format checking
+- Clippy linting
+- Test suite
+- Cross-platform builds
+- Release packaging
+
+## Contributing Guidelines
+
+### Pull Request Process
+
+1. Fork the repository
+2. Create feature branch
+3. Make changes with tests
+4. Ensure CI passes
+5. Submit PR with description
+
+### Code Review
+
+- Address feedback promptly
+- Keep PRs focused
+- Include tests
+- Update documentation
+
+### Getting Help
+
+- Open an issue for bugs
+- Start a discussion for features
+- Join our Discord community
+- Check existing issues first
+
+## Advanced Topics
+
+### Custom Agents
+
+Add support for new AI agents:
+
+1. Add to whitelist in `src/core/config.rs`
+2. Add prompt patterns if needed
+3. Test thoroughly
+4. Document usage
+
+### Performance Profiling
+
+```bash
+# CPU profiling
+cargo build --release
+perf record ./target/release/codemux
+perf report
+
+# Memory profiling
+valgrind --tool=memcheck ./target/release/codemux
+```
+
+### Cross-compilation
+
+```bash
+# For Linux ARM64
+cargo build --target aarch64-unknown-linux-gnu
+
+# For macOS Intel
+cargo build --target x86_64-apple-darwin
+```
+
+## Resources
+
+- [Rust Book](https://doc.rust-lang.org/book/)
+- [Tokio Docs](https://tokio.rs)
+- [React Native Docs](https://reactnative.dev)
+- [Expo Docs](https://docs.expo.dev)
+- [Fumadocs](https://fumadocs.vercel.app)
