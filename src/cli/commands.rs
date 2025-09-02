@@ -63,11 +63,7 @@ pub enum Commands {
     /// Stop the server
     Stop,
     /// Restart the server (stop and start)
-    Restart {
-        /// Port to listen on after restart
-        #[arg(short, long, default_value_t = crate::core::config::default_server_port())]
-        port: u16,
-    },
+    Restart,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -86,9 +82,5 @@ pub enum ServerCommands {
     /// Stop the server
     Stop,
     /// Restart the server (stop and start)
-    Restart {
-        /// Port to listen on after restart
-        #[arg(short, long, default_value_t = crate::core::config::default_server_port())]
-        port: u16,
-    },
+    Restart,
 }

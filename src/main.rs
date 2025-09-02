@@ -176,6 +176,6 @@ async fn main() -> Result<()> {
         Commands::List => handlers::list_sessions(config).await,
         Commands::ListProjects => handlers::list_projects(config).await,
         Commands::Stop => handlers::stop_server(config).await,
-        Commands::Restart { port } => handlers::restart_server(config, *port).await,
+        Commands::Restart => handlers::restart_server(config).await,
     }
 }

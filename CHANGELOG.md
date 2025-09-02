@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+- Updated app identifier from `com.codemux.codemux` to `dev.codemux.cli` for proper configuration directory structure
 
 
 ## [0.1.8] - 2025-09-02

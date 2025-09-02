@@ -3,6 +3,7 @@
 
 use crate::cli::ServerCommands;
 use crate::client::{CodeMuxClient, SessionTui};
+use crate::core::config::{save_server_port, get_stored_server_port};
 use crate::server::{manager::SessionManagerHandle, start_web_server};
 use crate::utils::tui_writer::LogEntry;
 use crate::{Config, Result};
@@ -307,6 +308,11 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
                 return Ok(());
             }
 
+            // Save the port for future restarts
+            if let Err(e) = save_server_port(port) {
+                tracing::warn!("Failed to save server port: {}", e);
+            }
+
             if detach {
                 // Start server in background (detached)
                 let current_exe = std::env::current_exe()?;
@@ -410,8 +416,12 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
             }
         }
 
-        Some(ServerCommands::Restart { port }) => {
+        Some(ServerCommands::Restart) => {
             println!("Restarting server...");
+
+            // Get the stored port, or use default if not found
+            let port = get_stored_server_port();
+            println!("Using port: {} (from stored configuration)", port);
 
             // First stop the server if it's running
             if client.is_server_running().await {
@@ -642,10 +652,14 @@ pub async fn list_projects(config: Config) -> Result<()> {
     Ok(())
 }
 
-pub async fn restart_server(config: Config, port: u16) -> Result<()> {
+pub async fn restart_server(config: Config) -> Result<()> {
     let client = CodeMuxClient::from_config(&config);
 
     println!("Restarting server...");
+
+    // Get the stored port, or use default if not found
+    let port = get_stored_server_port();
+    println!("Using port: {} (from stored configuration)", port);
 
     // First stop the server if it's running
     if client.is_server_running().await {

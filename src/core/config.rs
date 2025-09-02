@@ -36,7 +36,7 @@ impl Default for Config {
         agents.insert("cursor".to_string());
         agents.insert("continue".to_string());
 
-        let data_dir = directories::ProjectDirs::from("com", "codemux", "codemux")
+        let data_dir = directories::ProjectDirs::from("dev", "codemux", "cli")
             .map(|dirs| dirs.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from(".codemux"));
 
@@ -57,9 +57,52 @@ pub fn default_server_port() -> u16 {
     if cfg!(debug_assertions) { 18765 } else { 8765 }
 }
 
+/// Get the stored server port for current build type, or default if not found
+pub fn get_stored_server_port() -> u16 {
+    match load_stored_port() {
+        Ok(port) => port,
+        Err(_) => default_server_port(),
+    }
+}
+
+/// Save the current server port for the current build type
+pub fn save_server_port(port: u16) -> Result<()> {
+    let port_file = get_port_file_path()?;
+    tracing::info!("Saving server port {} to file: {:?}", port, port_file);
+    std::fs::create_dir_all(port_file.parent().unwrap())?;
+    std::fs::write(port_file, port.to_string())?;
+    Ok(())
+}
+
+/// Load the stored server port for current build type
+fn load_stored_port() -> Result<u16> {
+    let port_file = get_port_file_path()?;
+    if !port_file.exists() {
+        return Err(anyhow::anyhow!("Port file does not exist"));
+    }
+    let content = std::fs::read_to_string(port_file)?;
+    let port: u16 = content.trim().parse()?;
+    Ok(port)
+}
+
+/// Get the port file path for current build type
+fn get_port_file_path() -> Result<PathBuf> {
+    let config_dir = directories::ProjectDirs::from("dev", "codemux", "cli")
+        .map(|dirs| dirs.config_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".codemux"));
+    
+    let filename = if cfg!(debug_assertions) {
+        "debug_port"
+    } else {
+        "release_port"
+    };
+    
+    Ok(config_dir.join(filename))
+}
+
 impl Config {
     pub fn load() -> Result<Self> {
-        if let Some(config_dir) = directories::ProjectDirs::from("com", "codemux", "codemux") {
+        if let Some(config_dir) = directories::ProjectDirs::from("dev", "codemux", "cli") {
             let config_file = config_dir.config_dir().join("config.toml");
             if config_file.exists() {
                 let content = std::fs::read_to_string(&config_file)?;
@@ -88,7 +131,7 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        if let Some(config_dir) = directories::ProjectDirs::from("com", "codemux", "codemux") {
+        if let Some(config_dir) = directories::ProjectDirs::from("dev", "codemux", "cli") {
             std::fs::create_dir_all(config_dir.config_dir())?;
             let config_file = config_dir.config_dir().join("config.toml");
             let content = toml::to_string_pretty(self)?;
