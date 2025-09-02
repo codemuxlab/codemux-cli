@@ -37,7 +37,7 @@ export function AlertDemo() {
 				<View role="list" className="ml-0.5 pb-2 pl-6">
 					<Text role="listitem" className="text-sm">
 						<Text className="web:pr-2">•</Text> Check that the server is running
-						on port 8765
+						on port 18765 (debug) or 8765 (release)
 					</Text>
 					<Text role="listitem" className="text-sm">
 						<Text className="web:pr-2">•</Text> Verify your network connection

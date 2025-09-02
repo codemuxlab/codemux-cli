@@ -9,8 +9,8 @@ export function ErrorState() {
 			<Alert variant="destructive" icon={AlertCircleIcon} className="max-w-md">
 				<AlertTitle>Failed to load projects</AlertTitle>
 				<AlertDescription>
-					Check that the backend is running on port 8765 and try refreshing the
-					page.
+					Check that the backend is running on port 18765 (debug) or 8765
+					(release) and try refreshing the page.
 				</AlertDescription>
 			</Alert>
 		</View>
