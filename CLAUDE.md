@@ -411,14 +411,104 @@ Releases are fully automated using [cargo-dist](https://axodotdev.github.io/carg
 
 #### Release Process
 
-1. Update version in `Cargo.toml`: `version = "0.0.5"`
-2. Run `cargo build` to update `Cargo.lock` with new version
-3. Commit changes: `git commit -m "Bump version to 0.0.5"`
-4. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
-5. GitHub Actions automatically:
+##### Option 1: Manual Release (Current Method)
+1. **Update CHANGELOG.md**: Add release notes under "Unreleased" section
+2. Update version in `Cargo.toml`: `version = "0.0.5"`
+3. Run `cargo build` to update `Cargo.lock` with new version
+4. Commit changes: `git commit -m "Bump version to 0.0.5"`
+5. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
+6. GitHub Actions automatically:
    - Builds binaries for all platforms (macOS, Linux ARM64/x64)
-   - Creates GitHub Release with artifacts
+   - Creates GitHub Release with artifacts (includes changelog content)
    - Publishes to Homebrew tap (`codemuxlab/homebrew-tap`)
+
+##### Option 2: Automated Release with cargo-release (Recommended for Future)
+1. **Add release notes**: Update "Unreleased" section in CHANGELOG.md
+2. **Run cargo-release**: `cargo release <level>` (e.g., `cargo release patch`)
+3. **cargo-release automatically**:
+   - Updates version in Cargo.toml and Cargo.lock
+   - Transforms "Unreleased" section to versioned section with date
+   - Creates new "Unreleased" section for future changes
+   - Commits all changes
+4. **Manual tag creation**: `git tag v<version> && git push origin v<version>`
+5. **GitHub Actions** handles the rest (building, releasing, publishing)
+
+#### Changelog Guidelines
+
+CodeMux uses **Keep a Changelog** format with cargo-dist integration:
+
+**File Location**: `CHANGELOG.md` in repository root
+
+**Format Structure**:
+```markdown
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- New features go here
+
+### Changed
+- Changes to existing functionality
+
+### Fixed
+- Bug fixes
+
+## [0.1.5] - 2024-09-02
+
+### Added
+- WSL support for installation scripts
+- Smart platform detection for install commands
+
+### Fixed
+- Installation script redirect handling
+- Shell compatibility issues with echo commands
+```
+
+**Section Types** (use only when applicable):
+- **Added**: New features
+- **Changed**: Changes in existing functionality  
+- **Deprecated**: Soon-to-be removed features
+- **Removed**: Removed features
+- **Fixed**: Bug fixes
+- **Security**: Vulnerability fixes
+
+**Key Rules**:
+1. **Never edit "Unreleased" heading** - cargo-dist updates it automatically during releases
+2. **Date format**: Use ISO 8601 (`YYYY-MM-DD`)
+3. **Version links**: Include semantic version numbers in square brackets
+4. **Human-readable**: Write for users, not just developers
+5. **Grouping**: Group similar changes together
+6. **Chronological order**: Newest releases first
+
+**Integration with cargo-dist and cargo-release**:
+- **cargo-dist** automatically parses CHANGELOG.md and includes content in GitHub releases
+- **cargo-release** (when used) transforms "Unreleased" sections into versioned sections with dates
+- **Manual releases** require manually updating CHANGELOG.md structure
+- Release notes from CHANGELOG.md appear in GitHub release descriptions
+
+**cargo-release Configuration** (`release.toml`):
+```toml
+# Disable features handled by cargo-dist
+push = false       # cargo-dist handles git operations
+publish = false    # We don't publish to crates.io  
+tag = false        # Manual tagging for cargo-dist workflow
+
+# Automatic changelog processing
+pre-release-replacements = [
+  {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [{{version}}] - {{date}}"},
+  # Creates new Unreleased section for next development cycle
+]
+
+# Security settings
+sign-tag = true
+sign-commit = true
+```
 
 #### cargo-dist Configuration
 
@@ -440,6 +530,27 @@ dist plan
 
 # Check current configuration
 dist --help
+```
+
+#### cargo-release Commands (Optional Automation)
+
+```bash
+# Install cargo-release (one-time setup)
+cargo install cargo-release
+
+# Preview what cargo-release would do (dry run)
+cargo release --dry-run
+
+# Release with automatic version bump
+cargo release patch    # 0.1.5 -> 0.1.6
+cargo release minor    # 0.1.5 -> 0.2.0  
+cargo release major    # 0.1.5 -> 1.0.0
+
+# Release with specific version
+cargo release --version 0.2.0
+
+# After cargo-release, manually create and push tag
+git tag v<version> && git push origin v<version>
 ```
 
 **Important**: The version in `Cargo.toml` must match the git tag version (without the `v` prefix). For example:

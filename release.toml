@@ -1,0 +1,26 @@
+# Configuration for cargo-release
+# https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+
+# Disable automatic git push - cargo-dist handles this
+push = false
+
+# Disable automatic cargo publish - we don't publish to crates.io
+publish = false
+
+# Disable automatic tag creation - we handle this manually for cargo-dist
+tag = false
+
+# Pre-release replacements to update CHANGELOG.md
+pre-release-replacements = [
+  # Replace "Unreleased" with the version number
+  {file="CHANGELOG.md", search="## \\[Unreleased\\]", replace="## [{{version}}] - {{date}}"},
+  # Add new Unreleased section for next development
+  {file="CHANGELOG.md", search="# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on \\[Keep a Changelog\\]\\(https://keepachangelog.com/en/1.0.0/\\),\nand this project adheres to \\[Semantic Versioning\\]\\(https://semver.org/spec/v2.0.0.html\\).\n", replace="# Changelog\n\nAll notable changes to this project will be documented in this file.\n\nThe format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\nand this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n## [Unreleased]\n\n### Added\n\n### Changed\n\n### Fixed\n\n"},
+]
+
+# Allow working with uncommitted changes during release process
+# Note: cargo-release will commit the changes automatically
+
+# Disable signing for now (GPG not configured)
+sign-tag = false
+sign-commit = false

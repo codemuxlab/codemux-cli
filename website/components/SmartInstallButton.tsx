@@ -27,7 +27,7 @@ export function SmartInstallButton() {
     setPlatform(detectPlatform());
   }, []);
 
-  const installCommand = 'curl -sSf https://codemux.dev/install.sh | sh';
+  const installCommand = 'curl -sSfL https://codemux.dev/install.sh | sh';
   
   const handleClick = async () => {
     if (platform === 'macos' || platform === 'linux') {

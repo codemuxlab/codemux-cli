@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CodeMux Installation Script
-# Usage: curl -sSf https://codemux.dev/install.sh | sh
+# Usage: curl -sSfL https://codemux.dev/install.sh | sh
 
 set -euo pipefail
 
@@ -18,20 +18,20 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # Helper functions
 log() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    printf "${BLUE}[INFO]${NC} %s\n" "$1"
 }
 
 warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+    printf "${YELLOW}[WARN]${NC} %s\n" "$1"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    printf "${RED}[ERROR]${NC} %s\n" "$1"
     exit 1
 }
 
 success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
+    printf "${GREEN}[SUCCESS]${NC} %s\n" "$1"
 }
 
 # Detect platform and architecture
