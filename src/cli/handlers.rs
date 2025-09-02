@@ -410,6 +410,58 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
             }
         }
 
+        Some(ServerCommands::Restart { port }) => {
+            println!("Restarting server...");
+
+            // First stop the server if it's running
+            if client.is_server_running().await {
+                println!("Stopping current server...");
+                match client.shutdown_server().await {
+                    Ok(()) => {
+                        println!("✅ Server stopped");
+                        
+                        // Wait a moment to ensure it's fully stopped
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    }
+                    Err(e) => {
+                        println!("⚠️  Failed to stop server cleanly: {}", e);
+                        println!("Continuing with restart...");
+                    }
+                }
+            }
+
+            // Now start the server
+            println!("Starting server on port {}...", port);
+            
+            // Start server in background (detached) mode for restart
+            let current_exe = std::env::current_exe()?;
+            let mut cmd = tokio::process::Command::new(&current_exe);
+            cmd.args(["server", "start", "--port", &port.to_string(), "--detach"]);
+
+            // Pass through RUST_LOG environment variable
+            if let Ok(rust_log) = std::env::var("RUST_LOG") {
+                cmd.env("RUST_LOG", rust_log);
+            }
+
+            let child = cmd
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("Failed to spawn server: {}", e))?;
+
+            println!(
+                "🚀 CodeMux server restarted with PID: {}",
+                child.id().unwrap_or(0)
+            );
+            println!("📍 Server will be available at http://localhost:{}", port);
+
+            // Wait a moment and verify it started
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            if client.is_server_running().await {
+                println!("✅ Server is running successfully");
+            } else {
+                println!("⚠️  Server may still be starting up...");
+            }
+        }
+
         None => {
             // Default to showing status when no subcommand provided
             println!("Checking server status...");
@@ -422,6 +474,7 @@ pub async fn handle_server_command(config: Config, command: Option<ServerCommand
                 println!("  • codemux server start    - Start the server");
                 println!("  • codemux server status   - Check server status");
                 println!("  • codemux server stop     - Stop the server");
+                println!("  • codemux server restart  - Restart the server");
             }
         }
     }
@@ -584,6 +637,62 @@ pub async fn list_projects(config: Config) -> Result<()> {
         Err(e) => {
             println!("❌ Failed to list projects: {}", e);
         }
+    }
+
+    Ok(())
+}
+
+pub async fn restart_server(config: Config, port: u16) -> Result<()> {
+    let client = CodeMuxClient::from_config(&config);
+
+    println!("Restarting server...");
+
+    // First stop the server if it's running
+    if client.is_server_running().await {
+        println!("Stopping current server...");
+        match client.shutdown_server().await {
+            Ok(()) => {
+                println!("✅ Server stopped");
+                
+                // Wait a moment to ensure it's fully stopped
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            }
+            Err(e) => {
+                println!("⚠️  Failed to stop server cleanly: {}", e);
+                println!("Continuing with restart...");
+            }
+        }
+    }
+
+    // Now start the server
+    println!("Starting server on port {}...", port);
+    
+    // Start server in background (detached) mode for restart
+    let current_exe = std::env::current_exe()?;
+    let mut cmd = tokio::process::Command::new(&current_exe);
+    cmd.args(["server", "start", "--port", &port.to_string(), "--detach"]);
+
+    // Pass through RUST_LOG environment variable
+    if let Ok(rust_log) = std::env::var("RUST_LOG") {
+        cmd.env("RUST_LOG", rust_log);
+    }
+
+    let child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn server: {}", e))?;
+
+    println!(
+        "🚀 CodeMux server restarted with PID: {}",
+        child.id().unwrap_or(0)
+    );
+    println!("📍 Server will be available at http://localhost:{}", port);
+
+    // Wait a moment and verify it started
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    if client.is_server_running().await {
+        println!("✅ Server is running successfully");
+    } else {
+        println!("⚠️  Server may still be starting up...");
     }
 
     Ok(())

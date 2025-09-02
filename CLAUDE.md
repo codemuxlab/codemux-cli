@@ -398,6 +398,10 @@ expo-app/src/
 
 ## Release Process
 
+### IMPORTANT: Update CHANGELOG.md Before Commits
+
+**Always update CHANGELOG.md in the [Unreleased] section before committing new features or fixes.** This ensures changes are properly documented for the next release.
+
 ### Versioning Convention
 
 We use semantic versioning with the following convention:

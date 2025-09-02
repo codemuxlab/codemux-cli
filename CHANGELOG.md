@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Server restart command (`codemux restart` and `codemux server restart`) for convenient server management
+- Expo app now uses port 18765 in development mode to match debug build configuration
 
 ### Changed
 
