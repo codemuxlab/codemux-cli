@@ -69,7 +69,7 @@ pub enum ServerCommands {
     /// Start the server explicitly
     Start {
         /// Port to listen on
-        #[arg(short, long, default_value = "8765")]
+        #[arg(short, long, default_value_t = crate::core::config::default_server_port())]
         port: u16,
         /// Run server in background (detached)
         #[arg(short, long)]

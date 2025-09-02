@@ -18,20 +18,20 @@ capture:
 
 # Build React Native Web app only
 app-build:
-    cd app && npm run build
+    cd expo-app && npm run build
 
 # Start React Native Web development server
 app-dev:
-    cd app && npm start
+    cd expo-app && npm start
 
 # Install dependencies for React app
 app-install:
-    cd app && npm install
+    cd expo-app && npm install
 
 # Clean all build artifacts
 clean:
     cargo clean
-    cd app && rm -rf dist _expo node_modules/.cache
+    cd expo-app && rm -rf dist _expo node_modules/.cache
 
 # Run tests
 test:
@@ -52,7 +52,7 @@ ts-bindings:
 
 # Lint React Native app
 lint-app: ts-bindings
-    cd app && npm run lint
+    cd expo-app && npm run lint
 
 # Lint both Rust and React app
 lint: clippy lint-app
@@ -71,7 +71,7 @@ run *args:
 
 # Run with debug logging
 run-debug:
-    cargo run --bin codemux -- run claude --debug
+    RUST_LOG=debug cargo run --bin codemux -- run claude
 
 # Quick development iteration with file watching
 watch:
@@ -90,7 +90,7 @@ setup:
     @echo "Installing Rust dependencies..."
     just build
     @echo "Installing Node.js dependencies..."
-    cd app && npm install
+    cd expo-app && npm install
     @echo "✅ Setup complete!"
 
 # Run capture session recording

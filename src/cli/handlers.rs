@@ -188,7 +188,7 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("unknown"))
         .display()
         .to_string();
-    let url = format!("http://localhost:8765/session/{}", session_id); // Default port for now
+    let url = format!("http://localhost:{}/session/{}", crate::core::config::default_server_port(), session_id);
 
     // Print session info
     if is_continuing {
@@ -248,7 +248,7 @@ pub async fn run_client_session(params: RunSessionParams) -> Result<()> {
             let tui_session_info = crate::client::tui::SessionInfo {
                 id: session_id.clone(),
                 agent: agent.clone(),
-                _port: 8765, // Default port
+                _port: crate::core::config::default_server_port(),
                 working_dir,
                 url: url.clone(),
             };

@@ -29,7 +29,7 @@ just capture             # Build capture binary only (fast)
 # Run commands  
 just dev                 # Development workflow - debug mode (fast startup)
 just run                 # Production workflow - release mode (includes React app automatically)
-just run-debug           # Run with debug logging
+just run-debug           # Run with debug logging (RUST_LOG=debug)
 just server              # Start server mode
 
 # Capture system
@@ -65,8 +65,9 @@ SKIP_WEB_BUILD=1 cargo build --bin codemux-capture  # Capture binary only
 # Run
 cargo run --bin codemux                  # Development run mode (debug, no React app by default)
 cargo run --release --bin codemux       # Production run mode (includes React app automatically)
-cargo run --bin codemux -- run claude --debug  # Debug mode (logs to /tmp/codemux-debug.log)
-cargo run --bin codemux -- server start # Server mode
+cargo run --bin codemux -- run claude --logfile debug.log  # Run with logging to file
+RUST_LOG=debug cargo run --bin codemux -- server start     # Server with debug logging
+cargo run --bin codemux -- server start 2> server.log      # Server with stderr redirected to file
 
 # Capture system
 SKIP_WEB_BUILD=1 cargo run --bin codemux-capture -- --agent claude --output session.jsonl
@@ -81,7 +82,7 @@ cargo clippy                             # Lint code
 
 ### React Native App (Expo)
 ```bash
-cd app
+cd expo-app
 npm install              # Install dependencies
 npm run lint             # Run Biome linter (REQUIRED before commits)
 npm run lint:fix         # Auto-fix linting issues where possible
@@ -98,7 +99,7 @@ npx expo export         # Export for production
 - **TanStack Query** for API state management and caching
 
 **Linting Requirements**:
-- **React Native App**: ALWAYS run `npm run lint` inside the `app/` directory before committing
+- **React Native App**: ALWAYS run `npm run lint` inside the `expo-app/` directory before committing
 - **Website**: ALWAYS run `npm run lint` inside the `website/` directory before committing  
 - Fix all linting errors and warnings before submitting changes
 - Both projects use Biome for strict TypeScript and React best practices
@@ -113,6 +114,7 @@ npx expo export         # Export for production
    - `codemux add-project <path>` - Register a project
    - `codemux list` - List projects/sessions
    - `codemux stop` - Stop server
+   - **Server Ports**: Debug builds use port 18765, release builds use port 8765 (customizable with `--port` flag)
 
 2. **Whitelist System**: 
    - Configurable list of allowed AI CLI tools (claude, gemini, aider, etc.)
@@ -188,7 +190,10 @@ When implementing features, consider using:
   - **Web UI Scaling**: Implements proper scaling with `translate()` + `scale()` transforms, dimension validation, and centering
   - **Resize Handling**: Clear transforms during resize operations to prevent conflicts, use proper timing with requestAnimationFrame
 - **Process Management**: Properly handle SIGTERM/SIGINT for graceful shutdown
-- **Debug Logging**: In debug mode (`--debug` flag), all tracing output is written to `/tmp/codemux-debug.log` to avoid interfering with TUI display. In normal mode, only ERROR level messages are logged and discarded.
+- **Logging**: 
+  - **Server mode**: Logs to stderr by default. Use `RUST_LOG=debug` for verbose output or redirect stderr to a file
+  - **TUI mode**: Uses special writer to avoid interfering with terminal display. Use `--logfile` flag to write logs to a file
+  - **Log levels**: Control with `RUST_LOG` environment variable (e.g., `RUST_LOG=debug`, `RUST_LOG=codemux=trace`)
 - **Output to Terminal**: Use `eprintln!` instead of `println!` to avoid interfering with the TUI display. The TUI uses stdout for rendering, so any `println!` calls will corrupt the display. Use `eprintln!` for debugging or error messages that need to go to stderr.
 
 ### Session Continuity (`--continue` flag)
@@ -290,6 +295,7 @@ pub struct GridCell {
 - **Cross-platform**: Works on web browsers via React Native Web
 - **Debug Capture**: Session recording and analysis for troubleshooting
 - **Terminal Scrollback**: Full scrollback buffer support with mouse wheel and scroll events
+- **React Native Reusables**: Full component library setup with shadcn/ui design system for React Native
 
 ### Terminal Scrollback Implementation
 CodeMux provides full terminal scrollback functionality that allows users to scroll through terminal history, essential for reviewing command output, logs, and debugging information.
@@ -348,6 +354,48 @@ type GridUpdateMessage = {
 
 This implementation provides proper terminal multiplexer scrollback behavior while maintaining type safety and performance.
 
+### React Native Reusables Component System
+The React Native app uses React Native Reusables, which provides shadcn/ui components optimized for React Native development.
+
+#### Setup Features
+- **CSS Variables**: Complete light/dark theme system with HSL color variables
+- **NativeWind Integration**: Tailwind CSS v3 with React Native optimizations
+- **Portal System**: `@rn-primitives/portal` for overlay components (dropdowns, tooltips, etc.)
+- **Type Safety**: Full TypeScript integration with `clsx` and `tailwind-merge`
+- **Path Aliases**: `@/*` mapping for clean imports
+- **Utility Functions**: `cn()` helper for conditional className merging
+
+#### Installation Command
+```bash
+npx @react-native-reusables/cli@latest add [component-name]
+```
+
+#### Available Components
+- **Layout**: Accordion, Card, Separator, Tabs, Aspect Ratio
+- **Forms**: Input, Textarea, Button, Checkbox, Radio Group, Select, Switch, Toggle, Toggle Group, Label
+- **Feedback**: Alert, Alert Dialog, Badge, Progress, Skeleton, Tooltip
+- **Navigation**: Context Menu, Dialog, Dropdown Menu, Hover Card, Menubar, Popover
+- **Data Display**: Avatar, Text
+- **Utility**: Collapsible
+
+#### Configuration Files
+- **Global Styles**: `expo-app/src/global.css` - CSS variables and Tailwind directives
+- **Tailwind Config**: `expo-app/tailwind.config.js` - Theme colors, animations, border radius
+- **Components Config**: `expo-app/components.json` - CLI tool configuration
+- **Theme Integration**: `expo-app/src/lib/theme.ts` - React Navigation theme mapping
+- **Utilities**: `expo-app/src/lib/utils.ts` - `cn()` className helper
+
+#### Directory Structure
+```
+expo-app/src/
+├── components/ui/     # Generated component files
+├── lib/
+│   ├── theme.ts      # React Navigation themes
+│   └── utils.ts      # Utility functions
+├── hooks/            # Custom hooks
+└── global.css        # Global styles and CSS variables
+```
+
 ## Release Process
 
 ### Versioning Convention
@@ -364,9 +412,10 @@ Releases are fully automated using [cargo-dist](https://axodotdev.github.io/carg
 #### Release Process
 
 1. Update version in `Cargo.toml`: `version = "0.0.5"`
-2. Commit changes: `git commit -m "Bump version to 0.0.5"`
-3. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
-4. GitHub Actions automatically:
+2. Run `cargo build` to update `Cargo.lock` with new version
+3. Commit changes: `git commit -m "Bump version to 0.0.5"`
+4. Create and push version tag: `git tag v0.0.5 && git push origin v0.0.5`
+5. GitHub Actions automatically:
    - Builds binaries for all platforms (macOS, Linux ARM64/x64)
    - Creates GitHub Release with artifacts
    - Publishes to Homebrew tap (`codemuxlab/homebrew-tap`)

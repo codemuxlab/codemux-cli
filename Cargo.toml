@@ -1,6 +1,6 @@
 [package]
 name = "codemux"
-version = "0.1.3"
+version = "0.1.5"
 edition = "2021"
 description = "Terminal multiplexer for AI coding CLIs - code from anywhere with mobile-ready UI"
 homepage = "https://www.codemux.dev"

@@ -1,0 +1,221 @@
+---
+title: Commands Reference
+description: Complete CLI command reference for CodeMux
+---
+
+# Commands Reference
+
+Complete reference for all CodeMux CLI commands and options.
+
+## Global Commands
+
+### `codemux <agent> [args]`
+
+Launch an AI agent in quick mode.
+
+```bash
+codemux claude [options]
+```
+
+**Options:**
+- `--open, -o` - Auto-open the web interface in browser
+- `--continue` - Continue from the most recent JSONL conversation file
+- `--resume <session-id>` - Resume from a specific session ID
+- `--project <path>` - Project path or ID
+- `--logfile <path>` - Path to write logs to file
+
+**Supported Agents:**
+- `claude` - Anthropic's Claude
+- `gemini` - Google's Gemini
+- `aider` - Aider AI coding assistant
+- `cursor` - Cursor AI
+- `continue` - Continue.dev
+
+### `codemux server`
+
+Manage the CodeMux server.
+
+#### `codemux server start`
+
+Start the server in the background.
+
+```bash
+codemux server start [options]
+```
+
+**Options:**
+- `--port, -p <PORT>` - Port to listen on (default: 8765 for release, 18765 for debug)
+- `--detach, -d` - Run server in background (detached)
+
+#### `codemux server status`
+
+Show server status.
+
+```bash
+codemux server status
+```
+
+#### `codemux server stop`
+
+Stop the running server.
+
+```bash
+codemux server stop
+```
+
+## Session Management
+
+### `codemux attach <session-id>`
+
+Attach to an existing session.
+
+```bash
+codemux attach abc123def
+```
+
+### `codemux list`
+
+List all active sessions.
+
+```bash
+codemux list
+```
+
+Output shows:
+- Session ID
+- Agent type
+- Project path
+- Status (running/stopped)
+- Created timestamp
+
+### `codemux kill-session <session-id>`
+
+Terminate a specific session.
+
+```bash
+codemux kill-session abc123def
+```
+
+## Project Management
+
+### `codemux add-project <path>`
+
+Register a project with the server.
+
+```bash
+codemux add-project /path/to/project [options]
+```
+
+**Options:**
+- `--name, -n <NAME>` - Optional project name (defaults to directory name)
+
+### `codemux list-projects`
+
+List all registered projects.
+
+```bash
+codemux list-projects
+```
+
+## Advanced Usage
+
+### Session Continuity
+
+The `--continue` flag automatically finds and resumes the most recent conversation:
+
+```bash
+# Start a new Claude session
+codemux claude
+
+# Later, continue where you left off
+codemux claude --continue
+```
+
+This scans `~/.claude/projects/` for the most recently modified `.jsonl` file and resumes that conversation.
+
+### Environment Variables
+
+Control logging verbosity:
+
+```bash
+# Debug logging
+RUST_LOG=debug codemux server start
+
+# Trace logging for specific module
+RUST_LOG=codemux::server=trace codemux server start
+```
+
+### Log Output
+
+For debugging, redirect logs to a file:
+
+```bash
+# Server mode - redirect stderr
+codemux server start 2> server.log
+
+# TUI mode - use --logfile
+codemux claude --logfile debug.log
+```
+
+## Port Configuration
+
+CodeMux uses different default ports based on build type:
+
+- **Release builds**: Port 8765
+- **Debug builds**: Port 18765
+
+This allows running both debug and release versions simultaneously. Override with `--port`:
+
+```bash
+codemux server start --port 9000
+```
+
+## Examples
+
+### Basic Workflow
+
+```bash
+# Start server
+codemux server start
+
+# Add your project
+codemux add-project ~/my-project
+
+# Start Claude with web UI
+codemux claude --open
+
+# List sessions
+codemux list
+
+# Attach to a session from another terminal
+codemux attach <session-id>
+```
+
+### Development Workflow
+
+```bash
+# Start with debug logging
+RUST_LOG=debug codemux server start
+
+# Run Claude with log file
+codemux claude --logfile session.log
+
+# Continue previous session
+codemux claude --continue
+```
+
+### Multiple Projects
+
+```bash
+# Add multiple projects
+codemux add-project ~/project1 --name "Frontend"
+codemux add-project ~/project2 --name "Backend"
+codemux add-project ~/project3 --name "Docs"
+
+# Start sessions for each
+codemux claude --project ~/project1
+codemux claude --project ~/project2
+
+# List all active sessions
+codemux list
+```

@@ -133,14 +133,20 @@ just ci         # Full CI pipeline
 ### Debug Logging
 
 ```bash
-# Run with debug logging
+# Run with debug logging (uses RUST_LOG=debug)
 just run-debug
 
-# Or manually
-cargo run --bin codemux -- run claude --debug
+# Or manually with log file
+cargo run --bin codemux -- run claude --logfile debug.log
+
+# Or with environment variable for verbose output
+RUST_LOG=debug cargo run --bin codemux -- run claude
 ```
 
-Debug logs are written to `/tmp/codemux-debug.log` to avoid interfering with the TUI.
+For TUI mode, use `--logfile` to write logs to a file. For server mode, logs go to stderr and can be redirected:
+```bash
+RUST_LOG=debug cargo run --bin codemux -- server start 2> server.log
+```
 
 ### Session Capture
 

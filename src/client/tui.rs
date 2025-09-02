@@ -194,7 +194,7 @@ impl SessionTui {
     }
 
     fn get_web_url(&self) -> String {
-        format!("http://localhost:8765/session/{}", self.session_id)
+        format!("http://localhost:{}/session/{}", crate::core::config::default_server_port(), self.session_id)
     }
 
     /// Create terminal area with standard calculation (single source of truth)
@@ -224,7 +224,7 @@ impl SessionTui {
         tracing::info!("Connecting to WebSocket for session {}", self.session_id);
 
         // Create client and connect to WebSocket (this now includes auto-reconnection)
-        let client = CodeMuxClient::new("http://localhost:8765".to_string());
+        let client = CodeMuxClient::new(format!("http://localhost:{}", crate::core::config::default_server_port()));
         let session_connection = client.connect_to_session(&self.session_id).await?;
 
         // Convert SessionConnection to PtyChannels

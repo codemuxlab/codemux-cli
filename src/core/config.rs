@@ -43,13 +43,18 @@ impl Default for Config {
         Config {
             whitelist: AgentWhitelist { agents },
             server: ServerConfig {
-                port: 8765,
+                port: default_server_port(),
                 data_dir: data_dir.clone(),
                 pid_file: data_dir.join("server.pid"),
             },
             web: WebConfig { static_dir: None },
         }
     }
+}
+
+/// Get the default server port based on build type
+pub fn default_server_port() -> u16 {
+    if cfg!(debug_assertions) { 18765 } else { 8765 }
 }
 
 impl Config {
