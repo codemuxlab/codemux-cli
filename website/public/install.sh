@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CodeMux Installation Script
-# Usage: curl -sSf https://codemux.dev/install.sh | sh
+# Usage: curl -sSfL https://codemux.dev/install.sh | sh
 
 set -euo pipefail
 

@@ -16,7 +16,7 @@ const installCommands: InstallCommand[] = [
   {
     platform: 'unix',
     title: 'macOS / Linux / WSL',
-    command: 'curl -sSf https://codemux.dev/install.sh | sh',
+    command: 'curl -sSfL https://codemux.dev/install.sh | sh',
     icon: <Apple className="h-4 w-4" />,
   },
   {
