@@ -11,7 +11,7 @@ CodeMux is built with a modular, channel-based architecture that enables flexibl
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   CLI/TUI   │     │   Web UI    │     │ React Native│
+│   CLI/TUI   │     │   Web UI    │     │Claude Code  │
 └──────┬──────┘     └──────┬──────┘     └──────┬──────┘
        │                   │                    │
        └───────────────────┼────────────────────┘
@@ -28,7 +28,7 @@ CodeMux is built with a modular, channel-based architecture that enables flexibl
                           │
                     ┌─────▼─────┐
                     │ AI Agents  │
-                    │(Whitelisted)│
+                    │  (Claude)  │
                     └────────────┘
 ```
 
@@ -86,11 +86,11 @@ Multiple client types can connect to PTY sessions:
 - Provides native HTML components for prompts
 - Supports scaling and responsive design
 
-#### React Native Client
-- Mobile-optimized interface
-- Touch-friendly interactions
-- Cross-platform support (iOS/Android)
-- Gesture-based navigation
+#### Claude Code Integration
+- Optimized for Claude Code workflows
+- Session continuity with --continue flag
+- JSONL conversation persistence
+- Direct integration with Claude projects
 
 ### 4. Grid Update System
 

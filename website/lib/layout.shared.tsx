@@ -26,7 +26,17 @@ export function baseOptions(): BaseLayoutProps {
       ),
     },
     // see https://fumadocs.dev/docs/ui/navigation/links
-    links: [],
+    links: [
+      {
+        text: 'Documentation',
+        url: '/docs',
+      },
+      {
+        text: 'Releases',
+        url: 'https://github.com/codemuxlab/codemux-cli/releases',
+        external: true,
+      },
+    ],
     githubUrl: 'https://github.com/codemuxlab/codemux-cli'
   };
 }
